@@ -1,7 +1,7 @@
-From 88b2ce32d015ed339bdb7136ed418c9bf4483210 Mon Sep 17 00:00:00 2001
+From a1c1b8f9ab853fae9e998e1ad883ea8413076144 Mon Sep 17 00:00:00 2001
 From: Roman Stratiienko <r.stratiienko@gmail.com>
 Date: Wed, 23 Jun 2021 17:14:23 +0300
-Subject: [PATCH 09/21] minigbm: Add dmabuf_heap-based backend
+Subject: [PATCH 13/18] minigbm: Add dmabuf_heap-based backend
 
 WIP at this moment.
 Working on RPI4. (v3d+vc4).
@@ -11,10 +11,10 @@ Change-Id: I517f095543b031e35f0d48bc03f6010a67012865
 ---
  dmabuf_driver/UniqueFd.h                 | 115 ++++++++++
  dmabuf_driver/dma-heap.h                 |  33 +++
- dmabuf_driver/dmabuf_external_driver.cpp |  31 +++
+ dmabuf_driver/dmabuf_external_driver.cpp |  26 +++
  dmabuf_driver/dmabuf_internals.cpp       | 276 +++++++++++++++++++++++
  dmabuf_driver/dmabuf_internals.h         |  36 +++
- 5 files changed, 491 insertions(+)
+ 5 files changed, 486 insertions(+)
  create mode 100644 dmabuf_driver/UniqueFd.h
  create mode 100644 dmabuf_driver/dma-heap.h
  create mode 100644 dmabuf_driver/dmabuf_external_driver.cpp
@@ -183,10 +183,10 @@ index 0000000..1f42e47
 +#endif
 diff --git a/dmabuf_driver/dmabuf_external_driver.cpp b/dmabuf_driver/dmabuf_external_driver.cpp
 new file mode 100644
-index 0000000..a50e2d3
+index 0000000..94b9e4b
 --- /dev/null
 +++ b/dmabuf_driver/dmabuf_external_driver.cpp
-@@ -0,0 +1,31 @@
+@@ -0,0 +1,26 @@
 +#include "dmabuf_internals.h"
 +
 +#include "drv_priv.h"
@@ -196,7 +196,7 @@ index 0000000..a50e2d3
 +extern "C" {
 +#endif
 +
-+struct backend dmabuf_backend = {
++struct backend backend_dmabuf_heap = {
 +	.name = "dmabuf",
 +	.init = dmabuf_driver_init,
 +	.close = dmabuf_driver_close,
@@ -209,11 +209,6 @@ index 0000000..a50e2d3
 +	.bo_get_plane_fd = dmabuf_bo_get_plane_fd,
 +	.resolve_format_and_use_flags = dmabuf_resolve_format_and_use_flags,
 +};
-+
-+struct backend *init_external_backend(int *fd)
-+{
-+	return &dmabuf_backend;
-+}
 +
 +#ifdef __cplusplus
 +}

@@ -1,7 +1,7 @@
-From 86c7087ad2760bc1593cb95733be4ae61197cb5a Mon Sep 17 00:00:00 2001
+From be2054b7aac7878deee2cf218a4cdd59e8f00e6e Mon Sep 17 00:00:00 2001
 From: Roman Stratiienko <r.stratiienko@gmail.com>
 Date: Sun, 25 Sep 2022 19:22:53 +0300
-Subject: [PATCH 17/21] dma_heaps: Constraints for RPI4
+Subject: [PATCH 17/18] dma_heaps: Constraints for RPI4
 
 Change-Id: Icce8164cde8da483d683c06a4936ffde05b6f515
 Signed-off-by: Roman Stratiienko <r.stratiienko@gmail.com>
