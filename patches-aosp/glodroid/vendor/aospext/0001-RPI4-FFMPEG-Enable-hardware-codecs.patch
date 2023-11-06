@@ -9,19 +9,6 @@ Signed-off-by: Roman Stratiienko <r.stratiienko@gmail.com>
  ffmpeg.mk                 | 7 +++++++
  2 files changed, 8 insertions(+), 1 deletion(-)
 
-diff --git a/aospext_get_buildflags.mk b/aospext_get_buildflags.mk
-index 778b3de..d522e4c 100644
---- a/aospext_get_buildflags.mk
-+++ b/aospext_get_buildflags.mk
-@@ -186,7 +186,7 @@ endef
- define nospace-includes
-   $(subst $(space)-isystem$(space),$(space)-isystem, \
-   $(subst $(space)-I$(space),$(space)-I, \
--  $(strip $(c-includes))))
-+  $(strip $(c-includes) $(addprefix -I , $(PRIVATE_C_INCLUDES)))))
- endef
- 
- # Ensure include paths are always absolute
 diff --git a/ffmpeg.mk b/ffmpeg.mk
 index 9086afd..8eb60d3 100644
 --- a/ffmpeg.mk
