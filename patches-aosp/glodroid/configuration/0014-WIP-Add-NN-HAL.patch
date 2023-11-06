@@ -1,0 +1,46 @@
+From 02daf147ba4f58fc18c779e90b0a814c56dcd8df Mon Sep 17 00:00:00 2001
+From: Roman Stratiienko <r.stratiienko@gmail.com>
+Date: Mon, 6 Nov 2023 04:08:43 +0200
+Subject: [PATCH 14/14] WIP: Add NN HAL
+
+Signed-off-by: Roman Stratiienko <r.stratiienko@gmail.com>
+---
+ common/other-hals/board.mk  | 8 ++++++++
+ common/other-hals/device.mk | 8 ++++++++
+ 2 files changed, 16 insertions(+)
+
+diff --git a/common/other-hals/board.mk b/common/other-hals/board.mk
+index ac20fd6..98438ed 100644
+--- a/common/other-hals/board.mk
++++ b/common/other-hals/board.mk
+@@ -1,3 +1,11 @@
+ BCOH_PATH := $(patsubst $(CURDIR)/%,%,$(dir $(abspath $(lastword $(MAKEFILE_LIST)))))
+ 
+ BOARD_VENDOR_SEPOLICY_DIRS       += $(BCOH_PATH)/sepolicy/vendor
++
++# NN
++BOARD_BUILD_AOSPEXT_COMPUTELIBRARY := true
++BOARD_COMPUTELIBRARY_SRC_DIR := glodroid/vendor/ComputeLibrary
++BOARD_BUILD_AOSPEXT_ARMNN := true
++BOARD_ARMNN_SRC_DIR := glodroid/vendor/armnn
++
++ARMNN_COMPUTE_CL_ENABLE ?= 0
+diff --git a/common/other-hals/device.mk b/common/other-hals/device.mk
+index c47aec2..92d3a34 100644
+--- a/common/other-hals/device.mk
++++ b/common/other-hals/device.mk
+@@ -70,3 +70,11 @@ PRODUCT_PACKAGES += \
+     android.hardware.health-service.example_recovery \
+ 
+ endif
++
++ifeq ($(GD_NO_DEFAULT_NN),)
++PRODUCT_PACKAGES += \
++    android.hardware.neuralnetworks@1.3-service-armnn \
++    libarm_compute \
++    libarmnn \
++
++endif
+-- 
+2.39.2
+

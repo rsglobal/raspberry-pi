@@ -1,0 +1,107 @@
+From 061664d5b082a3fd1cd0764c5f269908ca224db2 Mon Sep 17 00:00:00 2001
+From: Roman Stratiienko <r.stratiienko@gmail.com>
+Date: Mon, 6 Nov 2023 02:09:20 +0200
+Subject: [PATCH 3/5] Add support for cmake build system
+
+Signed-off-by: Roman Stratiienko <r.stratiienko@gmail.com>
+---
+ aospext_cross_compile.mk | 10 ++++++++
+ tools/makefile_cmake.mk  | 51 ++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 61 insertions(+)
+ create mode 100644 tools/makefile_cmake.mk
+
+diff --git a/aospext_cross_compile.mk b/aospext_cross_compile.mk
+index 3f01add..12aafde 100644
+--- a/aospext_cross_compile.mk
++++ b/aospext_cross_compile.mk
+@@ -10,6 +10,7 @@
+ # AOSPEXT_GEN_PKGCONFIGS (list: "pkg1:version pkg2:version", optional)
+ # FFMPEG_DEFINITIONS (optional)
+ # MESON_BUILD_ARGUMENTS (optional)
++# CMAKE_ARGUMENTS (optional)
+ #
+ # Inputs set by aospext_get_buildflags.mk
+ # AOSPEXT_ARCH_PREFIX
+@@ -51,6 +52,9 @@ $(AOSPEXT_INTERNAL_BUILD_TARGET): CARGO_RUST_TARGET  := $(subst arm64,aarch64,$(
+ # ffmpeg
+ $(AOSPEXT_INTERNAL_BUILD_TARGET): FFMPEG_DEFINITIONS  := $(FFMPEG_DEFINITIONS)
+ 
++# cmake
++$(AOSPEXT_INTERNAL_BUILD_TARGET): CMAKE_ARGUMENTS  := $(CMAKE_ARGUMENTS)
++
+ # dirs
+ $(AOSPEXT_INTERNAL_BUILD_TARGET): AOSP_FLAGS_DIR_OUT := $(call relative-to-absolute,$(AOSP_FLAGS_DIR_OUT))
+ $(AOSPEXT_INTERNAL_BUILD_TARGET): AOSPEXT_ABS_OUT_DIR:= $(call relative-to-absolute,$(AOSPEXT_OUT_DIR))
+@@ -120,6 +124,12 @@ $(AOSPEXT_INTERNAL_BUILD_TARGET): $(AOSP_FLAGS_DIR_OUT)/.sharedlib.timestamp
+ 		-e 's#\[PLACE_FOR_FFMPEG_CPU_FAMILY\]#$(AOSPEXT_CPU_FAMILY)#g' \
+ 		$(AOSPEXT_ABS_OUT_DIR)/project_specific.mk
+ 
++# For cmake build system
++	sed -i \
++		-e 's#\[PLACE_FOR_CMAKE_ARGS\]#$(CMAKE_ARGUMENTS)#g' \
++		-e 's#\[PLACE_FOR_LIBDIR\]#$(LIBDIR)#g' \
++		$(AOSPEXT_ABS_OUT_DIR)/project_specific.mk
++
+ 	# Build project
+ 	export $$(cat /etc/environment):$(RUST_BIN_DIR_ABS):$(AOSP_ABSOLUTE_PATH)/$(LLVM_PREBUILTS_PATH) && make -C $(AOSPEXT_ABS_OUT_DIR) install
+ 
+diff --git a/tools/makefile_cmake.mk b/tools/makefile_cmake.mk
+new file mode 100644
+index 0000000..2ff86e2
+--- /dev/null
++++ b/tools/makefile_cmake.mk
+@@ -0,0 +1,51 @@
++#!/usr/bin/make
++
++CMAKE_DEFS := [PLACE_FOR_CMAKE_ARGS] \
++    -DCMAKE_TOOLCHAIN_FILE=$(OUT_BASE_DIR)/gen/cross.cmake.out \
++    -DCMAKE_PLATFORM_NO_VERSIONED_SONAME=ON \
++
++CMAKE_INSTALL_LIBDIR := [PLACE_FOR_LIBDIR]
++
++CONFIGURE_TARGET:=./logs/3.configure.log
++BUILD_TARGET:=./logs/4.build.log
++INSTALL_TARGET:=./logs/5.install.log
++
++NPROC:=$(shell grep -c "^processor" /proc/cpuinfo)
++
++configure: ## Configure the project
++configure: export BASE_DIR = $(OUT_BASE_DIR)
++configure: $(CONFIGURE_TARGET)
++$(CONFIGURE_TARGET): $(PATCH_TARGET)
++	@echo Configuring...
++	@mkdir -p $(OUT_BUILD_DIR)
++	@echo "set(CMAKE_SYSTEM_NAME Linux)" > $(OUT_BASE_DIR)/gen/cross.cmake.out
++	@echo "set(CMAKE_C_COMPILER $(OUT_BASE_DIR)/toolchain_wrapper/wrap_c)" >> $(OUT_BASE_DIR)/gen/cross.cmake.out
++	@echo "set(CMAKE_CXX_COMPILER $(OUT_BASE_DIR)/toolchain_wrapper/wrap_cxx)" >> $(OUT_BASE_DIR)/gen/cross.cmake.out
++	@echo "set(CMAKE_C_FLAGS \"[C_ARGS]\")" >> $(OUT_BASE_DIR)/gen/cross.cmake.out
++	@echo "set(CMAKE_CXX_FLAGS \"[CPP_ARGS]\")" >> $(OUT_BASE_DIR)/gen/cross.cmake.out
++	@echo "set(CMAKE_EXE_LINKER_FLAGS \"[C_LINK_ARGS]\")" >> $(OUT_BASE_DIR)/gen/cross.cmake.out
++	@echo "set(CMAKE_SHARED_LINKER_FLAGS \"[C_LINK_ARGS]\")" >> $(OUT_BASE_DIR)/gen/cross.cmake.out
++	@echo "set(CMAKE_MODULE_LINKER_FLAGS \"[C_LINK_ARGS]\")" >> $(OUT_BASE_DIR)/gen/cross.cmake.out
++	@echo "set(CMAKE_INSTALL_LIBDIR \"$(CMAKE_INSTALL_LIBDIR)\")" >> $(OUT_BASE_DIR)/gen/cross.cmake.out
++	@(cd $(OUT_BUILD_DIR) && cmake $(CMAKE_DEFS) $(OUT_SRC_DIR)) &> $@.tmp || (cat $@.tmp && exit 1)
++	@mv $@.tmp $@ -f
++
++build: ## Build the project
++build: export BASE_DIR = $(OUT_BASE_DIR)
++build: $(BUILD_TARGET)
++$(BUILD_TARGET): $(CONFIGURE_TARGET)
++	@echo Building...
++	@make -C $(OUT_BUILD_DIR) -j$(NPROC) &> $@.tmp || (cat $@.tmp && exit 1)
++	@mv $@.tmp $@ -f
++
++install: ## Install the project (will execute copy, patch, configure and build prior to install)
++install: $(INSTALL_TARGET)
++$(INSTALL_TARGET): $(BUILD_TARGET)
++	@echo Installing...
++	@mkdir -p $(OUT_INSTALL_DIR)
++	@(cd $(OUT_BUILD_DIR) && cmake --install . --prefix $(OUT_INSTALL_DIR)/vendor) &> $@.tmp || (cat $@.tmp && exit 1)
++	@mv $@.tmp $@ -f
++
++gen_aospless: ## Generate tree for building without AOSP or NDK
++	L_AOSP_ROOT=$(AOSP_ROOT) L_AOSP_OUT_DIR=$(AOSP_OUT_DIR) python3 $(OUT_BASE_DIR)/gen_aospless_dir.py
++	tar -czf aospless.tar.gz aospless
+-- 
+2.39.2
+

@@ -1,0 +1,1241 @@
+From b902d66e467464a0b664248a6be9fc75b219b4c2 Mon Sep 17 00:00:00 2001
+From: Roman Stratiienko <r.stratiienko@gmail.com>
+Date: Sun, 5 Nov 2023 03:03:46 +0200
+Subject: [PATCH 1/5] Cleanup and deduplicate some code
+
+1. Replace ffmpeg_cross.mk, meson_cross.mk and cargo_cross.mk with the
+   single file aospext_cross_compile.mk.
+   This should simplify adding new build systems support.
+2. Rename some variables to highlight their purpose better.
+3. Describe internal parameters better to help newcomers navigate the
+   logic.
+4. Add aospext_cleanup.mk that cleans up variables to avoid stale
+   variables influencing other project cases.
+
+Signed-off-by: Roman Stratiienko <r.stratiienko@gmail.com>
+---
+ aospext_cleanup.mk       |  19 ++++++
+ aospext_cross_compile.mk | 126 +++++++++++++++++++++++++++++++++++++++
+ aospext_gen_targets.mk   |  19 +++---
+ cargo_cross.mk           |  65 --------------------
+ cargo_mmradio.mk         |  11 ++--
+ ffmpeg.mk                |  20 +++----
+ ffmpeg_cross.mk          |  69 ---------------------
+ meson_cross.mk           | 100 -------------------------------
+ meson_dav1d.mk           |  17 ++----
+ meson_dbus.mk            |  15 +++--
+ meson_drmhwcomposer.mk   |  14 ++---
+ meson_ffmpegcodec2.mk    |  13 ++--
+ meson_glib.mk            |  16 +++--
+ meson_libcamera.mk       |  15 +++--
+ meson_libgudev.mk        |  15 +++--
+ meson_libqmi.mk          |  15 +++--
+ meson_mesa3d.mk          |  56 ++++++++---------
+ meson_minigbm.mk         |  26 ++++----
+ meson_modemmanager.mk    |  15 +++--
+ tools/makefile_meson.mk  |  10 ++--
+ tools/wrapper.sh         |  17 +++---
+ 21 files changed, 283 insertions(+), 390 deletions(-)
+ create mode 100644 aospext_cleanup.mk
+ create mode 100644 aospext_cross_compile.mk
+ delete mode 100644 cargo_cross.mk
+ delete mode 100644 ffmpeg_cross.mk
+ delete mode 100644 meson_cross.mk
+
+diff --git a/aospext_cleanup.mk b/aospext_cleanup.mk
+new file mode 100644
+index 0000000..e7f52b7
+--- /dev/null
++++ b/aospext_cleanup.mk
+@@ -0,0 +1,19 @@
++# SPDX-License-Identifier: Apache-2.0
++#
++# AOSPEXT project (https://github.com/GloDroid/aospext)
++#
++# Copyright (C) 2023 The GloDroid project
++
++include $(CLEAR_VARS)
++
++AOSPEXT_ARCH_PREFIX :=
++AOSPEXT_BUILD_SYSTEM :=
++AOSPEXT_EXTRA_DEPS :=
++AOSPEXT_GEN_PKGCONFIGS :=
++AOSPEXT_GEN_TARGETS :=
++AOSPEXT_INTERNAL_BUILD_TARGET :=
++AOSPEXT_OUT_DIR :=
++AOSPEXT_PROJECT_NAME :=
++AOSPEXT_EXPORT_INSTALLED_INCLUDE_DIRS :=
++FFMPEG_DEFINITIONS :=
++MESON_BUILD_ARGUMENTS :=
+diff --git a/aospext_cross_compile.mk b/aospext_cross_compile.mk
+new file mode 100644
+index 0000000..3f01add
+--- /dev/null
++++ b/aospext_cross_compile.mk
+@@ -0,0 +1,126 @@
++# SPDX-License-Identifier: Apache-2.0
++#
++# AOSPEXT project (https://github.com/GloDroid/aospext)
++#
++# Copyright (C) 2023 The GloDroid project
++#
++# Inputs provided by user:
++# AOSP_PROJECT_NAME (FFMPEG, MESA3D, etc.)
++# AOSPEXT_BUILD_SYSTEM (one of the meson, cmake, cargo, ffmpeg, cmake, autotools)
++# AOSPEXT_GEN_PKGCONFIGS (list: "pkg1:version pkg2:version", optional)
++# FFMPEG_DEFINITIONS (optional)
++# MESON_BUILD_ARGUMENTS (optional)
++#
++# Inputs set by aospext_get_buildflags.mk
++# AOSPEXT_ARCH_PREFIX
++# AOSPEXT_OUT_DIR
++#
++# Outputs:
++# AOSPEXT_INTERNAL_BUILD_TARGET target which is used as input by aospext_gen_targets.mk as a dependency
++
++MY_PATH := $(call my-dir)
++
++include $(LOCAL_PATH)/aospext_get_buildflags.mk
++
++define create-pkgconfig
++echo -e "Name: $2" \
++        "\nDescription: $2" \
++        "\nVersion: $3" > $1/$2.pc
++
++endef
++
++_TMP_SRC_PATH                           := $(BOARD_$(AOSPEXT_PROJECT_NAME)_SRC_DIR)
++_TMP_PATCHES_DIRS                       := $(BOARD_$(AOSPEXT_PROJECT_NAME)_PATCHES_DIRS)
++AOSPEXT_INTERNAL_BUILD_TARGET           := $(AOSPEXT_OUT_DIR)/.timestamp
++
++$(if $(_TMP_SRC_PATH),,$(error Variable BOARD_$(AOSPEXT_PROJECT_NAME)_SRC_DIR is not set))
++
++$(AOSPEXT_INTERNAL_BUILD_TARGET): AOSPEXT_BUILD_SYSTEM   := $(AOSPEXT_BUILD_SYSTEM)
++$(AOSPEXT_INTERNAL_BUILD_TARGET): AOSPEXT_GEN_PKGCONFIGS := $(AOSPEXT_GEN_PKGCONFIGS)
++$(AOSPEXT_INTERNAL_BUILD_TARGET): AOSPEXT_CPU_FAMILY     := $(subst arm64,aarch64,$(TARGET_$(AOSPEXT_ARCH_PREFIX)ARCH))
++$(AOSPEXT_INTERNAL_BUILD_TARGET): LIBDIR:=lib$(if $(TARGET_IS_64_BIT),$(if $(filter 64 first,$(LOCAL_MULTILIB)),64))
++
++# meson
++$(AOSPEXT_INTERNAL_BUILD_TARGET): MESON_RUST_TARGET  := $(subst arm64,aarch64,$(TARGET_$(AOSPEXT_ARCH_PREFIX)ARCH))-linux-android
++$(AOSPEXT_INTERNAL_BUILD_TARGET): MESON_BUILD_ARGUMENTS:=--prefix /vendor --libdir $(LIBDIR) --datadir etc/shared --libexecdir bin \
++                                                         --sbindir bin --localstatedir=/mnt/var --buildtype=debug $(MESON_BUILD_ARGUMENTS)
++
++# cargo
++$(AOSPEXT_INTERNAL_BUILD_TARGET): CARGO_RUST_TARGET  := $(subst arm64,aarch64,$(TARGET_$(AOSPEXT_ARCH_PREFIX)ARCH))-linux-android
++
++# ffmpeg
++$(AOSPEXT_INTERNAL_BUILD_TARGET): FFMPEG_DEFINITIONS  := $(FFMPEG_DEFINITIONS)
++
++# dirs
++$(AOSPEXT_INTERNAL_BUILD_TARGET): AOSP_FLAGS_DIR_OUT := $(call relative-to-absolute,$(AOSP_FLAGS_DIR_OUT))
++$(AOSPEXT_INTERNAL_BUILD_TARGET): AOSPEXT_ABS_OUT_DIR:= $(call relative-to-absolute,$(AOSPEXT_OUT_DIR))
++$(AOSPEXT_INTERNAL_BUILD_TARGET): _TMP_SRC_PATH     := $(_TMP_SRC_PATH)
++$(AOSPEXT_INTERNAL_BUILD_TARGET): _TMP_PATCHES_DIRS := $(_TMP_PATCHES_DIRS)
++$(AOSPEXT_INTERNAL_BUILD_TARGET): _TMP_OUT_SRC_DIR  := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/out_src)
++$(AOSPEXT_INTERNAL_BUILD_TARGET): _TMP_GEN_DIR      := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/gen)
++$(AOSPEXT_INTERNAL_BUILD_TARGET): _TMP_BUILD_DIR    := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/build)
++$(AOSPEXT_INTERNAL_BUILD_TARGET): _TMP_INSTALL_DIR  := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/install)
++$(AOSPEXT_INTERNAL_BUILD_TARGET): MY_PATH:=$(MY_PATH)
++$(AOSPEXT_INTERNAL_BUILD_TARGET): MY_OUT_ABS_PATH:=$(if $(patsubst /%,,$(OUT_DIR)),$(AOSP_ABSOLUTE_PATH)/$(OUT_DIR),$(OUT_DIR))
++$(AOSPEXT_INTERNAL_BUILD_TARGET): MY_ABS_PATH:=$(AOSP_ABSOLUTE_PATH)/$(MY_PATH)
++
++# toolchain
++$(AOSPEXT_INTERNAL_BUILD_TARGET): LLVM_PREBUILTS_PATH:=$(LLVM_PREBUILTS_PATH)
++$(AOSPEXT_INTERNAL_BUILD_TARGET): AR_TOOL:=$($($(AOSPEXT_ARCH_PREFIX))TARGET_AR)
++
++# target dependencies:
++_TMP_SRCS := $(sort $(shell find -L $(_TMP_SRC_PATH) -not -path '*/\.*'))
++_TMP_PATCHES := $(if $(_TMP_PATCHES_DIRS),$(sort $(shell find -L $(_TMP_PATCHES_DIRS) -not -path '*/\.*')))
++AOSPEXT_TOOLS := $(sort $(shell find -L $(MY_PATH)/tools -not -path '*/\.*'))
++RUST_BIN_DIR_ABS := $(if $(RUST_BIN_DIR),$(shell cd $(RUST_BIN_DIR) && pwd),$(HOME)/.cargo/bin)
++
++$(AOSPEXT_INTERNAL_BUILD_TARGET): $(_TMP_SRCS) $(_TMP_PATCHES) $(AOSPEXT_TOOLS)
++$(AOSPEXT_INTERNAL_BUILD_TARGET): $(AOSP_FLAGS_DIR_OUT)/.exec.timestamp
++$(AOSPEXT_INTERNAL_BUILD_TARGET): $(AOSP_FLAGS_DIR_OUT)/.sharedlib.timestamp
++	cp $(MY_ABS_PATH)/tools/wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrapper.sh
++	ln -sf ./wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrap_c
++	ln -sf ./wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrap_cxx
++	ln -sf ./wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrap_rust_ld
++	cp $(MY_ABS_PATH)/tools/gen_aospless_dir.py $(AOSPEXT_ABS_OUT_DIR)/gen_aospless_dir.py
++
++	cp $(MY_ABS_PATH)/tools/makefile_base.mk $(AOSPEXT_ABS_OUT_DIR)/Makefile
++	cp $(MY_ABS_PATH)/tools/makefile_$(AOSPEXT_BUILD_SYSTEM).mk $(AOSPEXT_ABS_OUT_DIR)/project_specific.mk
++	sed -i \
++		-e 's#\[PLACE_FOR_LLVM_DIR\]#$(LLVM_PREBUILTS_PATH)#g' \
++		-e 's#\[PLACE_FOR_AOSP_ROOT\]#$(AOSP_ABSOLUTE_PATH)#g' \
++		-e 's#\[PLACE_FOR_AOSP_OUT_DIR\]#$(MY_OUT_ABS_PATH)#g' \
++		-e 's#\[PLACE_FOR_SRC_DIR\]#$(_TMP_SRC_PATH)#g' \
++		-e 's#\[PLACE_FOR_PATCHES_DIRS\]#$(_TMP_PATCHES_DIRS)#g' \
++		-e 's#\[PLACE_FOR_OUT_BASE_DIR\]#$(AOSPEXT_ABS_OUT_DIR)#g' \
++		$(AOSPEXT_ABS_OUT_DIR)/Makefile
++
++	mkdir -p $(_TMP_GEN_DIR)
++	$(foreach pkg, $(AOSPEXT_GEN_PKGCONFIGS), $(call create-pkgconfig,$(_TMP_GEN_DIR),$(word 1, $(subst :, ,$(pkg))),$(word 2, $(subst :, ,$(pkg)))))
++
++# For meson build system
++	sed -i \
++		-e 's#\[PLACE_FOR_MESON_DEFS\]#$(MESON_BUILD_ARGUMENTS)#g' \
++		$(AOSPEXT_ABS_OUT_DIR)/project_specific.mk
++	# Prepare meson cross-compilation configuration file
++	cp $(MY_ABS_PATH)/tools/meson_aosp_cross.cfg $(_TMP_GEN_DIR)/meson_aosp_cross
++	sed -i \
++		-e 's#$$(AR_TOOL)#$(AR_TOOL)#g' \
++		-e 's#$$(MESON_CPU_FAMILY)#$(AOSPEXT_CPU_FAMILY)#g' \
++		-e 's#$$(MESON_RUST_TARGET)#$(MESON_RUST_TARGET)#g' \
++		$(_TMP_GEN_DIR)/meson_aosp_cross
++
++# For cargo build system
++	sed -i \
++		-e 's#\[PLACE_FOR_RUST_TARGET\]#$(CARGO_RUST_TARGET)#g' \
++		$(AOSPEXT_ABS_OUT_DIR)/project_specific.mk
++
++# For ffmpeg custom build system
++	sed -i \
++		-e 's#\[PLACE_FOR_FFMPEG_DEFINITIONS\]#--libdir=/vendor/$(LIBDIR) $(FFMPEG_DEFINITIONS)#g' \
++		-e 's#\[PLACE_FOR_FFMPEG_CPU_FAMILY\]#$(AOSPEXT_CPU_FAMILY)#g' \
++		$(AOSPEXT_ABS_OUT_DIR)/project_specific.mk
++
++	# Build project
++	export $$(cat /etc/environment):$(RUST_BIN_DIR_ABS):$(AOSP_ABSOLUTE_PATH)/$(LLVM_PREBUILTS_PATH) && make -C $(AOSPEXT_ABS_OUT_DIR) install
++
++	touch $@
+diff --git a/aospext_gen_targets.mk b/aospext_gen_targets.mk
+index 49d7e12..ffdac09 100644
+--- a/aospext_gen_targets.mk
++++ b/aospext_gen_targets.mk
+@@ -7,9 +7,14 @@
+ 
+ # Inputs:
+ # AOSPEXT_GEN_TARGETS array
+-# AOSPEXT_PROJECT_INSTALL_DIR
+-# AOSPEXT_PROJECT_OUT_INCLUDE_DIR
+-# AOSPEXT_TARGETS_DEP
++# AOSPEXT_INTERNAL_BUILD_TARGET
++# AOSPEXT_EXPORT_INSTALLED_INCLUDE_DIRS (optional)
++# AOSPEXT_EXTRA_DEPS (optional)
++
++__TMP_AOSPEXT_PROJECT_INSTALL_DIR := $(dir $(AOSPEXT_INTERNAL_BUILD_TARGET))/install
++
++__TMP_C_INCLUDE_DIRS := $(LOCAL_EXPORT_C_INCLUDE_DIRS)
++__TMP_C_INCLUDE_DIRS += $(foreach dir,$(AOSPEXT_EXPORT_INSTALLED_INCLUDE_DIRS), $(__TMP_AOSPEXT_PROJECT_INSTALL_DIR)/$(dir))
+ 
+ __TMP_MULTILIB := $(LOCAL_MULTILIB)
+ __TMP_SHARED_LIBRARIES := $(LOCAL_SHARED_LIBRARIES)
+@@ -39,9 +44,9 @@ endef
+ 
+ define gen_module_for_target
+ 
+-# Target should be already created after $(AOSPEXT_TARGETS_DEP) finished.
++# Target should be already created after $(AOSPEXT_INTERNAL_BUILD_TARGET) finished.
+ # So just define a target for KATI + update timestamp
+-$(AOSPEXT_PROJECT_INSTALL_DIR)/$(__TMP_DIR_$(__TYPE))/$(__PATHNAME): $(AOSPEXT_TARGETS_DEP)
++$(__TMP_AOSPEXT_PROJECT_INSTALL_DIR)/$(__TMP_DIR_$(__TYPE))/$(__PATHNAME): $(AOSPEXT_INTERNAL_BUILD_TARGET) $(AOSPEXT_EXTRA_DEPS)
+ 	touch -ch $$@
+ 
+ include $(CLEAR_VARS)
+@@ -51,12 +56,12 @@ LOCAL_MODULE := $(__MODULE)
+ LOCAL_VENDOR_MODULE := true
+ LOCAL_MODULE_PATH := $(__PATH_OVERRIDE)
+ LOCAL_MODULE_RELATIVE_PATH := $(__SUBDIR)
+-LOCAL_PREBUILT_MODULE_FILE := $(AOSPEXT_PROJECT_INSTALL_DIR)/$(__TMP_DIR_$(__TYPE))/$(__PATHNAME)
++LOCAL_PREBUILT_MODULE_FILE := $(__TMP_AOSPEXT_PROJECT_INSTALL_DIR)/$(__TMP_DIR_$(__TYPE))/$(__PATHNAME)
+ LOCAL_MULTILIB := $(__TMP_MULTILIB)
+ LOCAL_CHECK_ELF_FILES := false
+ LOCAL_MODULE_SYMLINKS := $(if $(__SYMLINK_SUFFIX),$(__MODULE)$(__SYMLINK_SUFFIX))
+ LOCAL_SHARED_LIBRARIES := $(__TMP_SHARED_LIBRARIES)
+-LOCAL_EXPORT_C_INCLUDE_DIRS := $(AOSPEXT_PROJECT_OUT_INCLUDE_DIR)
++LOCAL_EXPORT_C_INCLUDE_DIRS := $(__TMP_C_INCLUDE_DIRS)
+ 
+ include $(BUILD_PREBUILT)
+ 
+diff --git a/cargo_cross.mk b/cargo_cross.mk
+deleted file mode 100644
+index c8f46b3..0000000
+--- a/cargo_cross.mk
++++ /dev/null
+@@ -1,65 +0,0 @@
+-# SPDX-License-Identifier: Apache-2.0
+-#
+-# AOSPEXT project (https://github.com/GloDroid/aospext)
+-#
+-# Copyright (C) 2023 The GloDroid project
+-
+-MY_PATH := $(call my-dir)
+-
+-include $(LOCAL_PATH)/aospext_get_buildflags.mk
+-
+-CARGO_SRC_PATH                           := $(BOARD_$(AOSPEXT_PROJECT_NAME)_SRC_DIR)
+-CARGO_PATCHES_DIRS                       := $(BOARD_$(AOSPEXT_PROJECT_NAME)_PATCHES_DIRS)
+-CARGO_GEN_FILES_TARGET                   := $(AOSPEXT_OUT_DIR)/.timestamp
+-
+-$(if $(CARGO_SRC_PATH),,$(error Variable BOARD_$(AOSPEXT_PROJECT_NAME)_SRC_DIR is not set))
+-
+-$(CARGO_GEN_FILES_TARGET): CARGO_RUST_TARGET  := $(subst arm64,aarch64,$(TARGET_$(AOSPEXT_ARCH_PREFIX)ARCH))-linux-android
+-$(CARGO_GEN_FILES_TARGET): AOSP_FLAGS_DIR_OUT := $(call relative-to-absolute,$(AOSP_FLAGS_DIR_OUT))
+-$(CARGO_GEN_FILES_TARGET): AOSPEXT_ABS_OUT_DIR:= $(call relative-to-absolute,$(AOSPEXT_OUT_DIR))
+-$(CARGO_GEN_FILES_TARGET): CARGO_OUT_SRC_DIR  := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/out_src)
+-$(CARGO_GEN_FILES_TARGET): CARGO_BUILD_DIR    := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/build)
+-$(CARGO_GEN_FILES_TARGET): CARGO_INSTALL_DIR  := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/install)
+-
+-$(CARGO_GEN_FILES_TARGET): MY_PATH:=$(MY_PATH)
+-$(CARGO_GEN_FILES_TARGET): CARGO_SRC_PATH:=$(CARGO_SRC_PATH)
+-$(CARGO_GEN_FILES_TARGET): LIBDIR:=lib$(if $(TARGET_IS_64_BIT),$(if $(filter 64 first,$(LOCAL_MULTILIB)),64))
+-
+-$(CARGO_GEN_FILES_TARGET): MY_OUT_ABS_PATH:=$(if $(patsubst /%,,$(OUT_DIR)),$(AOSP_ABSOLUTE_PATH)/$(OUT_DIR),$(OUT_DIR))
+-$(CARGO_GEN_FILES_TARGET): MY_ABS_PATH:=$(AOSP_ABSOLUTE_PATH)/$(MY_PATH)
+-$(CARGO_GEN_FILES_TARGET): LLVM_PREBUILTS_PATH:=$(LLVM_PREBUILTS_PATH)
+-
+-AOSPEXT_TOOLS := $(sort $(shell find -L $(MY_PATH)/tools -not -path '*/\.*'))
+-CARGO_SRCS := $(sort $(shell find -L $(CARGO_SRC_PATH) -not -path '*/\.*'))
+-CARGO_PATCHES := $(if $(CARGO_PATCHES_DIRS),$(sort $(shell find -L $(CARGO_PATCHES_DIRS) -not -path '*/\.*')))
+-RUST_BIN_DIR_ABS := $(if $(RUST_BIN_DIR),$(shell cd $(RUST_BIN_DIR) && pwd),$(HOME)/.cargo/bin)
+-
+-$(CARGO_GEN_FILES_TARGET): $(CARGO_SRCS) $(CARGO_PATCHES) $(AOSPEXT_TOOLS)
+-$(CARGO_GEN_FILES_TARGET): CARGO_PATCHES_DIRS:=$(CARGO_PATCHES_DIRS)
+-$(CARGO_GEN_FILES_TARGET): $(AOSP_FLAGS_DIR_OUT)/.exec.timestamp
+-$(CARGO_GEN_FILES_TARGET): $(AOSP_FLAGS_DIR_OUT)/.sharedlib.timestamp
+-	cp $(MY_ABS_PATH)/tools/wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrapper.sh
+-	ln -sf ./wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrap_c
+-	ln -sf ./wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrap_cxx
+-	ln -sf ./wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrap_rust_ld
+-	cp $(MY_ABS_PATH)/tools/gen_aospless_dir.py $(AOSPEXT_ABS_OUT_DIR)/gen_aospless_dir.py
+-
+-	cp $(MY_ABS_PATH)/tools/makefile_base.mk $(AOSPEXT_ABS_OUT_DIR)/Makefile
+-	cp $(MY_ABS_PATH)/tools/makefile_cargo.mk $(AOSPEXT_ABS_OUT_DIR)/project_specific.mk
+-	sed -i \
+-		-e 's#\[PLACE_FOR_LLVM_DIR\]#$(LLVM_PREBUILTS_PATH)#g' \
+-		-e 's#\[PLACE_FOR_AOSP_ROOT\]#$(AOSP_ABSOLUTE_PATH)#g' \
+-		-e 's#\[PLACE_FOR_AOSP_OUT_DIR\]#$(MY_OUT_ABS_PATH)#g' \
+-		-e 's#\[PLACE_FOR_SRC_DIR\]#$(CARGO_SRC_PATH)#g' \
+-		-e 's#\[PLACE_FOR_PATCHES_DIRS\]#$(CARGO_PATCHES_DIRS)#g' \
+-		-e 's#\[PLACE_FOR_OUT_BASE_DIR\]#$(AOSPEXT_ABS_OUT_DIR)#g' \
+-		$(AOSPEXT_ABS_OUT_DIR)/Makefile
+-
+-	sed -i \
+-		-e 's#\[PLACE_FOR_RUST_TARGET\]#$(CARGO_RUST_TARGET)#g' \
+-		$(AOSPEXT_ABS_OUT_DIR)/project_specific.mk
+-
+-	# Build CARGO project
+-	export $$(cat /etc/environment):$(RUST_BIN_DIR_ABS):$(AOSP_ABSOLUTE_PATH)/$(LLVM_PREBUILTS_PATH) && make -C $(AOSPEXT_ABS_OUT_DIR) install
+-
+-	touch $@
+diff --git a/cargo_mmradio.mk b/cargo_mmradio.mk
+index f96f93b..d05be86 100644
+--- a/cargo_mmradio.mk
++++ b/cargo_mmradio.mk
+@@ -5,13 +5,13 @@
+ # Copyright (C) 2021 GlobalLogic Ukraine
+ # Copyright (C) 2021-2023 Roman Stratiienko (r.stratiienko@gmail.com)
+ 
+-AOSPEXT_PROJECT_NAME := MMRADIO
+-
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_MMRADIO)),)
+ 
+ LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
+ 
+-include $(CLEAR_VARS)
++AOSPEXT_PROJECT_NAME := MMRADIO
++AOSPEXT_BUILD_SYSTEM := cargo
+ 
+ LOCAL_SHARED_LIBRARIES := \
+     libbase \
+@@ -44,10 +44,7 @@ AOSPEXT_GEN_TARGETS := \
+ 
+ # Build first ARCH only
+ LOCAL_MULTILIB := first
+-include $(LOCAL_PATH)/cargo_cross.mk
+-AOSPEXT_TARGETS_DEP:=$(CARGO_GEN_FILES_TARGET)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(dir $(AOSPEXT_TARGETS_DEP))/install
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=
++include $(LOCAL_PATH)/aospext_cross_compile.mk
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ 
+ #-------------------------------------------------------------------------------
+diff --git a/ffmpeg.mk b/ffmpeg.mk
+index 9086afd..9574291 100644
+--- a/ffmpeg.mk
++++ b/ffmpeg.mk
+@@ -4,11 +4,13 @@
+ #
+ # Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
+ 
+-AOSPEXT_PROJECT_NAME := FFMPEG
+-
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_FFMPEG)),)
+ 
+ LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
++
++AOSPEXT_PROJECT_NAME := FFMPEG
++AOSPEXT_BUILD_SYSTEM := ffmpeg
+ 
+ LIBDRM_VERSION = $(shell cat external/libdrm/meson.build | grep -o "\<version\>\s*:\s*'\w*\.\w*\.\w*'" | grep -o "\w*\.\w*\.\w*" | head -1)
+ 
+@@ -32,25 +34,21 @@ AOSPEXT_GEN_TARGETS := \
+ include $(CLEAR_VARS)
+ 
+ LOCAL_SHARED_LIBRARIES := libc
+-FFMPEG_GEN_PKGCONFIGS :=
++AOSPEXT_GEN_PKGCONFIGS :=
+ 
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_DAV1D)),)
+ DAV1D_VERSION = $(shell cat $(BOARD_DAV1D_SRC_DIR)/meson.build | grep -o "\<version\>\s*:\s*'\w*\.\w*\.\w*'" | grep -o "\w*\.\w*\.\w*" | head -1)
+ LOCAL_SHARED_LIBRARIES += libdav1d
+-FFMPEG_GEN_PKGCONFIGS += dav1d:$(DAV1D_VERSION)
++AOSPEXT_GEN_PKGCONFIGS += dav1d:$(DAV1D_VERSION)
+ FFMPEG_DEFINITIONS += --enable-libdav1d
+ endif
+ 
+-#-------------------------------------------------------------------------------
++AOSPEXT_EXPORT_INSTALLED_INCLUDE_DIRS := vendor/include
+ 
+-LOCAL_MULTILIB := first
+-include $(LOCAL_PATH)/ffmpeg_cross.mk
+-FIRSTARCH_FFMPEG_TARGET:=$(FFMPEG_GEN_FILES_TARGET)
++#-------------------------------------------------------------------------------
+ 
+ LOCAL_MULTILIB := first
+-AOSPEXT_TARGETS_DEP:=$(FIRSTARCH_FFMPEG_TARGET)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(dir $(FIRSTARCH_FFMPEG_TARGET))/install
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=$(AOSPEXT_PROJECT_INSTALL_DIR)/vendor/include
++include $(LOCAL_PATH)/aospext_cross_compile.mk
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ 
+ endif # BOARD_BUILD_FFMPEG
+diff --git a/ffmpeg_cross.mk b/ffmpeg_cross.mk
+deleted file mode 100644
+index e1c8b51..0000000
+--- a/ffmpeg_cross.mk
++++ /dev/null
+@@ -1,69 +0,0 @@
+-# SPDX-License-Identifier: Apache-2.0
+-#
+-# AOSPEXT project (https://github.com/GloDroid/aospext)
+-#
+-# Copyright (C) 2023 The GloDroid project
+-
+-MY_PATH := $(call my-dir)
+-
+-include $(LOCAL_PATH)/aospext_get_buildflags.mk
+-
+-FFMPEG_SRC_PATH                           := $(BOARD_$(AOSPEXT_PROJECT_NAME)_SRC_DIR)
+-FFMPEG_PATCHES_DIRS                       := $(BOARD_$(AOSPEXT_PROJECT_NAME)_PATCHES_DIRS)
+-FFMPEG_GEN_FILES_TARGET                   := $(AOSPEXT_OUT_DIR)/.timestamp
+-
+-$(if $(FFMPEG_SRC_PATH),,$(error Variable BOARD_$(AOSPEXT_PROJECT_NAME)_SRC_DIR is not set))
+-
+-$(FFMPEG_GEN_FILES_TARGET): FFMPEG_CPU_FAMILY   := $(subst arm64,aarch64,$(TARGET_$(AOSPEXT_ARCH_PREFIX)ARCH))
+-$(FFMPEG_GEN_FILES_TARGET): FFMPEG_DEFINITIONS  := $(FFMPEG_DEFINITIONS)
+-$(FFMPEG_GEN_FILES_TARGET): AOSP_FLAGS_DIR_OUT  := $(call relative-to-absolute,$(AOSP_FLAGS_DIR_OUT))
+-$(FFMPEG_GEN_FILES_TARGET): AOSPEXT_ABS_OUT_DIR := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR))
+-$(FFMPEG_GEN_FILES_TARGET): FFMPEG_OUT_SRC_DIR  := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/out_src)
+-$(FFMPEG_GEN_FILES_TARGET): FFMPEG_BUILD_DIR    := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/build)
+-$(FFMPEG_GEN_FILES_TARGET): FFMPEG_GEN_DIR      := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/gen)
+-$(FFMPEG_GEN_FILES_TARGET): FFMPEG_INSTALL_DIR  := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/install)
+-
+-$(FFMPEG_GEN_FILES_TARGET): MY_PATH:=$(MY_PATH)
+-$(FFMPEG_GEN_FILES_TARGET): FFMPEG_SRC_PATH:=$(FFMPEG_SRC_PATH)
+-$(FFMPEG_GEN_FILES_TARGET): LIBDIR:=lib$(if $(TARGET_IS_64_BIT),$(if $(filter 64 first,$(LOCAL_MULTILIB)),64))
+-
+-$(FFMPEG_GEN_FILES_TARGET): FFMPEG_GEN_PKGCONFIGS:=$(FFMPEG_GEN_PKGCONFIGS)
+-$(FFMPEG_GEN_FILES_TARGET): MY_OUT_ABS_PATH:=$(if $(patsubst /%,,$(OUT_DIR)),$(AOSP_ABSOLUTE_PATH)/$(OUT_DIR),$(OUT_DIR))
+-$(FFMPEG_GEN_FILES_TARGET): MY_ABS_PATH:=$(AOSP_ABSOLUTE_PATH)/$(MY_PATH)
+-$(FFMPEG_GEN_FILES_TARGET): LLVM_PREBUILTS_PATH:=$(LLVM_PREBUILTS_PATH)
+-
+-AOSPEXT_TOOLS := $(sort $(shell find -L $(MY_PATH)/tools -not -path '*/\.*'))
+-FFMPEG_SRCS := $(sort $(shell find -L $(FFMPEG_SRC_PATH) -not -path '*/\.*'))
+-FFMPEG_PATCHES := $(if $(FFMPEG_PATCHES_DIRS),$(sort $(shell find -L $(FFMPEG_PATCHES_DIRS) -not -path '*/\.*')))
+-
+-$(FFMPEG_GEN_FILES_TARGET): $(FFMPEG_SRCS) $(FFMPEG_PATCHES) $(AOSPEXT_TOOLS)
+-$(FFMPEG_GEN_FILES_TARGET): FFMPEG_PATCHES_DIRS:=$(FFMPEG_PATCHES_DIRS)
+-$(FFMPEG_GEN_FILES_TARGET): $(AOSP_FLAGS_DIR_OUT)/.exec.timestamp
+-$(FFMPEG_GEN_FILES_TARGET): $(AOSP_FLAGS_DIR_OUT)/.sharedlib.timestamp
+-	cp $(MY_ABS_PATH)/tools/wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrapper.sh
+-	ln -sf ./wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrap_c
+-	cp $(MY_ABS_PATH)/tools/gen_aospless_dir.py $(AOSPEXT_ABS_OUT_DIR)/gen_aospless_dir.py
+-
+-	cp $(MY_ABS_PATH)/tools/makefile_base.mk $(AOSPEXT_ABS_OUT_DIR)/Makefile
+-	cp $(MY_ABS_PATH)/tools/makefile_ffmpeg.mk $(AOSPEXT_ABS_OUT_DIR)/project_specific.mk
+-	sed -i \
+-		-e 's#\[PLACE_FOR_LLVM_DIR\]#$(LLVM_PREBUILTS_PATH)#g' \
+-		-e 's#\[PLACE_FOR_AOSP_ROOT\]#$(AOSP_ABSOLUTE_PATH)#g' \
+-		-e 's#\[PLACE_FOR_AOSP_OUT_DIR\]#$(MY_OUT_ABS_PATH)#g' \
+-		-e 's#\[PLACE_FOR_SRC_DIR\]#$(FFMPEG_SRC_PATH)#g' \
+-		-e 's#\[PLACE_FOR_PATCHES_DIRS\]#$(FFMPEG_PATCHES_DIRS)#g' \
+-		-e 's#\[PLACE_FOR_OUT_BASE_DIR\]#$(AOSPEXT_ABS_OUT_DIR)#g' \
+-		$(AOSPEXT_ABS_OUT_DIR)/Makefile
+-
+-	sed -i \
+-		-e 's#\[PLACE_FOR_FFMPEG_DEFINITIONS\]#--libdir=/vendor/$(LIBDIR) $(FFMPEG_DEFINITIONS)#g' \
+-		-e 's#\[PLACE_FOR_FFMPEG_CPU_FAMILY\]#$(FFMPEG_CPU_FAMILY)#g' \
+-		$(AOSPEXT_ABS_OUT_DIR)/project_specific.mk
+-
+-	mkdir -p $(FFMPEG_GEN_DIR)
+-	$(foreach pkg, $(FFMPEG_GEN_PKGCONFIGS), $(call create-pkgconfig,$(FFMPEG_GEN_DIR),$(word 1, $(subst :, ,$(pkg))),$(word 2, $(subst :, ,$(pkg)))))
+-
+-	# Build FFMPEG project
+-	export $$(cat /etc/environment):$(RUST_BIN_DIR_ABS):$(AOSP_ABSOLUTE_PATH)/$(LLVM_PREBUILTS_PATH) && make -C $(AOSPEXT_ABS_OUT_DIR) install
+-
+-	touch $@
+diff --git a/meson_cross.mk b/meson_cross.mk
+deleted file mode 100644
+index 0a7680c..0000000
+--- a/meson_cross.mk
++++ /dev/null
+@@ -1,100 +0,0 @@
+-# SPDX-License-Identifier: Apache-2.0
+-#
+-# AOSPEXT project (https://github.com/GloDroid/aospext)
+-#
+-# Copyright (C) 2021 GlobalLogic Ukraine
+-# Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
+-
+-MY_PATH := $(call my-dir)
+-
+-define create-pkgconfig
+-echo -e "Name: $2" \
+-	"\nDescription: $2" \
+-	"\nVersion: $3" > $1/$2.pc
+-
+-endef
+-
+-include $(LOCAL_PATH)/aospext_get_buildflags.mk
+-
+-MESON_SRC_PATH                           := $(BOARD_$(AOSPEXT_PROJECT_NAME)_SRC_DIR)
+-MESON_PATCHES_DIRS                       := $(BOARD_$(AOSPEXT_PROJECT_NAME)_PATCHES_DIRS)
+-MESON_GEN_FILES_TARGET                   := $(AOSPEXT_OUT_DIR)/.timestamp
+-
+-$(if $(MESON_SRC_PATH),,$(error Variable BOARD_$(AOSPEXT_PROJECT_NAME)_SRC_DIR is not set))
+-
+-$(MESON_GEN_FILES_TARGET): MESON_CPU_FAMILY   := $(subst arm64,aarch64,$(TARGET_$(AOSPEXT_ARCH_PREFIX)ARCH))
+-$(MESON_GEN_FILES_TARGET): MESON_RUST_TARGET  := $(subst arm64,aarch64,$(TARGET_$(AOSPEXT_ARCH_PREFIX)ARCH))-linux-android
+-$(MESON_GEN_FILES_TARGET): AOSP_FLAGS_DIR_OUT := $(call relative-to-absolute,$(AOSP_FLAGS_DIR_OUT))
+-$(MESON_GEN_FILES_TARGET): MESON_OUT_SRC_DIR  := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/out_src)
+-$(MESON_GEN_FILES_TARGET): MESON_BUILD_DIR    := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/build)
+-$(MESON_GEN_FILES_TARGET): MESON_GEN_DIR      := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/gen)
+-$(MESON_GEN_FILES_TARGET): MESON_INSTALL_DIR  := $(call relative-to-absolute,$(AOSPEXT_OUT_DIR)/install)
+-
+-$(MESON_GEN_FILES_TARGET): MY_PATH:=$(MY_PATH)
+-$(MESON_GEN_FILES_TARGET): MESON_SRC_PATH:=$(MESON_SRC_PATH)
+-$(MESON_GEN_FILES_TARGET): LIBDIR:=lib$(if $(TARGET_IS_64_BIT),$(if $(filter 64 first,$(LOCAL_MULTILIB)),64))
+-
+-$(MESON_GEN_FILES_TARGET): MESON_GEN_PKGCONFIGS:=$(MESON_GEN_PKGCONFIGS)
+-$(MESON_GEN_FILES_TARGET): MESON_BUILD_ARGUMENTS:=--prefix /vendor --libdir $(LIBDIR) --datadir etc/shared --libexecdir bin \
+-                               --sbindir bin --localstatedir=/mnt/var --buildtype=debug $(MESON_BUILD_ARGUMENTS)
+-
+-$(MESON_GEN_FILES_TARGET): MY_OUT_ABS_PATH:=$(if $(patsubst /%,,$(OUT_DIR)),$(AOSP_ABSOLUTE_PATH)/$(OUT_DIR),$(OUT_DIR))
+-$(MESON_GEN_FILES_TARGET): MY_ABS_PATH:=$(AOSP_ABSOLUTE_PATH)/$(MY_PATH)
+-$(MESON_GEN_FILES_TARGET): AR_TOOL:=$($($(AOSPEXT_ARCH_PREFIX))TARGET_AR)
+-
+-AOSPEXT_TOOLS := $(sort $(shell find -L $(MY_PATH)/tools -not -path '*/\.*'))
+-MESON_SRCS := $(sort $(shell find -L $(MESON_SRC_PATH) -not -path '*/\.*'))
+-MESON_PATCHES := $(if $(MESON_PATCHES_DIRS),$(sort $(shell find -L $(MESON_PATCHES_DIRS) -not -path '*/\.*')))
+-RUST_BIN_DIR_ABS := $(if $(RUST_BIN_DIR),$(shell cd $(RUST_BIN_DIR) && pwd),$(HOME)/.cargo/bin)
+-
+-$(MESON_GEN_FILES_TARGET): $(MESON_SRCS) $(MESON_PATCHES) $(AOSPEXT_TOOLS)
+-$(MESON_GEN_FILES_TARGET): MESON_PATCHES_DIRS:=$(MESON_PATCHES_DIRS)
+-$(MESON_GEN_FILES_TARGET): $(AOSP_FLAGS_DIR_OUT)/.exec.timestamp
+-$(MESON_GEN_FILES_TARGET): $(AOSP_FLAGS_DIR_OUT)/.sharedlib.timestamp
+-	# Cleanup directories. Incremental build isn't supported.
+-	rm -rf $(MESON_GEN_DIR)
+-	mkdir -p $(MESON_GEN_DIR)
+-
+-	cp $(MY_ABS_PATH)/tools/wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrapper.sh
+-	ln -sf ./wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrap_c
+-	ln -sf ./wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrap_cxx
+-	ln -sf ./wrapper.sh $(AOSP_FLAGS_DIR_OUT)/wrap_rust_ld
+-	cp $(MY_ABS_PATH)/tools/gen_aospless_dir.py $(dir $(MESON_GEN_DIR))/gen_aospless_dir.py
+-
+-	cp $(MY_ABS_PATH)/tools/makefile_base.mk $(dir $(MESON_GEN_DIR))/Makefile
+-	cp $(MY_ABS_PATH)/tools/makefile_meson.mk $(dir $(MESON_GEN_DIR))/project_specific.mk
+-	sed -i \
+-		-e 's#\[PLACE_FOR_LLVM_DIR\]#$(dir $(AR_TOOL))#g' \
+-		-e 's#\[PLACE_FOR_AOSP_ROOT\]#$(AOSP_ABSOLUTE_PATH)#g' \
+-		-e 's#\[PLACE_FOR_AOSP_OUT_DIR\]#$(MY_OUT_ABS_PATH)#g' \
+-		-e 's#\[PLACE_FOR_SRC_DIR\]#$(MESON_SRC_PATH)#g' \
+-		-e 's#\[PLACE_FOR_PATCHES_DIRS\]#$(MESON_PATCHES_DIRS)#g' \
+-		-e 's#\[PLACE_FOR_OUT_BASE_DIR\]#$(dir $(MESON_GEN_DIR))#g' \
+-		$(dir $(MESON_GEN_DIR))/Makefile
+-
+-	sed -i \
+-		-e 's#\[PLACE_FOR_MESON_DEFS\]#$(MESON_BUILD_ARGUMENTS)#g' \
+-		$(dir $(MESON_GEN_DIR))/project_specific.mk
+-
+-	# Prepare meson cross-compilation configuration file
+-	cp $(MY_ABS_PATH)/tools/meson_aosp_cross.cfg $(MESON_GEN_DIR)/aosp_cross
+-	sed -i \
+-		-e 's#$$(AR_TOOL)#$(AR_TOOL)#g' \
+-		-e 's#$$(MY_ABS_PATH)#$(MY_ABS_PATH)#g' \
+-		-e 's#$$(MESON_CPU_FAMILY)#$(MESON_CPU_FAMILY)#g' \
+-		-e 's#$$(MESON_RUST_TARGET)#$(MESON_RUST_TARGET)#g' \
+-		$(MESON_GEN_DIR)/aosp_cross
+-
+-	# Prepare package info files
+-	$(foreach pkg, $(MESON_GEN_PKGCONFIGS), $(call create-pkgconfig,$(MESON_GEN_DIR),$(word 1, $(subst :, ,$(pkg))),$(word 2, $(subst :, ,$(pkg)))))
+-ifneq ($(MESON_GEN_LLVM_STUB),)
+-	# Some magic for mesa3d project
+-	mkdir -p $(MESON_OUT_SRC_DIR)/subprojects/llvm/
+-	echo -e "project('llvm', 'cpp', version : '$(MESON_LLVM_VERSION)')\n" \
+-		"dep_llvm = declare_dependency()\n"                           \
+-		"has_rtti = false\n" > $(dir $@)/subprojects/llvm/meson.build
+-endif
+-	# Build meson project
+-	export $$(cat /etc/environment):$(RUST_BIN_DIR_ABS) && make -C $(dir $(MESON_GEN_DIR)) install
+-
+-	touch $@
+diff --git a/meson_dav1d.mk b/meson_dav1d.mk
+index 026e8fe..56ef39d 100644
+--- a/meson_dav1d.mk
++++ b/meson_dav1d.mk
+@@ -5,18 +5,15 @@
+ # Copyright (C) 2021 GlobalLogic Ukraine
+ # Copyright (C) 2021-2023 Roman Stratiienko (r.stratiienko@gmail.com)
+ 
+-AOSPEXT_PROJECT_NAME := DAV1D
+-
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_DAV1D)),)
+ 
+ LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
+ 
+-include $(CLEAR_VARS)
++AOSPEXT_PROJECT_NAME := DAV1D
++AOSPEXT_BUILD_SYSTEM := meson
+ 
+ LOCAL_SHARED_LIBRARIES := libc
+-MESON_GEN_PKGCONFIGS :=
+-
+-MESON_BUILD_ARGUMENTS := \
+ 
+ # Format: TYPE:REL_PATH_TO_INSTALL_ARTIFACT:VENDOR_SUBDIR:MODULE_NAME:SYMLINK_SUFFIX
+ # TYPE one of: lib, bin, etc
+@@ -25,12 +22,10 @@ AOSPEXT_GEN_TARGETS := \
+     lib:libdav1d.so::libdav1d:             \
+     $(BOARD_DAV1D_EXTRA_TARGETS)
+ 
++AOSPEXT_EXPORT_INSTALLED_INCLUDE_DIRS := vendor/include
++
+ LOCAL_MULTILIB := first
+-include $(LOCAL_PATH)/meson_cross.mk
+-LOCAL_MULTILIB := first
+-AOSPEXT_TARGETS_DEP:=$(MESON_GEN_FILES_TARGET)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(dir $(AOSPEXT_TARGETS_DEP))/install
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=$(AOSPEXT_PROJECT_INSTALL_DIR)/vendor/include
++include $(LOCAL_PATH)/aospext_cross_compile.mk
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ 
+ #-------------------------------------------------------------------------------
+diff --git a/meson_dbus.mk b/meson_dbus.mk
+index deb5a06..90c210e 100644
+--- a/meson_dbus.mk
++++ b/meson_dbus.mk
+@@ -5,18 +5,18 @@
+ # Copyright (C) 2021 GlobalLogic Ukraine
+ # Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
+ 
+-AOSPEXT_PROJECT_NAME := DBUS
+-
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_DBUS)),)
+ 
+ LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
+ 
+-include $(CLEAR_VARS)
++AOSPEXT_PROJECT_NAME := DBUS
++AOSPEXT_BUILD_SYSTEM := meson
+ 
+ GLIB_VERSION = $(shell cat $(BOARD_GLIB_SRC_DIR)/meson.build | grep -o "\<version\>\s*:\s*'\w*\.\w*\.\w*'" | grep -o "\w*\.\w*\.\w*" | head -1)
+ 
+ LOCAL_SHARED_LIBRARIES := libc libexpat libglib-2.0 libgio-2.0 libgobject-2.0
+-MESON_GEN_PKGCONFIGS := expat glib-2.0:$(GLIB_VERSION) gio-unix-2.0:$(GLIB_VERSION)
++AOSPEXT_GEN_PKGCONFIGS := expat glib-2.0:$(GLIB_VERSION) gio-unix-2.0:$(GLIB_VERSION)
+ 
+ MESON_BUILD_ARGUMENTS := \
+     -Ddbus_session_bus_listen_address=3440
+@@ -38,11 +38,10 @@ AOSPEXT_GEN_TARGETS := \
+ AOSPEXT_GEN_TARGETS += \
+     $(foreach bin,$(TMP_OUT_BIN), bin:$(bin)::$(bin):)
+ 
++AOSPEXT_EXPORT_INSTALLED_INCLUDE_DIRS := vendor/include/dbus-1.0
++
+ LOCAL_MULTILIB := first
+-include $(LOCAL_PATH)/meson_cross.mk
+-AOSPEXT_TARGETS_DEP:=$(MESON_GEN_FILES_TARGET)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(dir $(AOSPEXT_TARGETS_DEP))/install
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=$(AOSPEXT_PROJECT_INSTALL_DIR)/vendor/include/dbus-1.0
++include $(LOCAL_PATH)/aospext_cross_compile.mk
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ 
+ #-------------------------------------------------------------------------------
+diff --git a/meson_drmhwcomposer.mk b/meson_drmhwcomposer.mk
+index c86f1de..ee6de8d 100644
+--- a/meson_drmhwcomposer.mk
++++ b/meson_drmhwcomposer.mk
+@@ -5,17 +5,18 @@
+ # Copyright (C) 2021 GlobalLogic Ukraine
+ # Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
+ 
+-AOSPEXT_PROJECT_NAME := DRMHWCOMPOSER
+ 
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_DRMHWCOMPOSER)),)
+ 
+ LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
+ 
+-include $(CLEAR_VARS)
++AOSPEXT_PROJECT_NAME := DRMHWCOMPOSER
++AOSPEXT_BUILD_SYSTEM := meson
+ 
+ LOCAL_HEADER_LIBRARIES :=
+ LOCAL_SHARED_LIBRARIES := libcutils libdrm libhardware libhidlbase liblog libsync libui libutils
+-MESON_GEN_PKGCONFIGS := cutils drm hardware hidlbase log sync ui utils
++AOSPEXT_GEN_PKGCONFIGS := cutils drm hardware hidlbase log sync ui utils
+ 
+ MESON_BUILD_ARGUMENTS := \
+ 
+@@ -30,7 +31,7 @@ ifeq ($(shell test $(PLATFORM_SDK_VERSION) -ge 33; echo $$?), 0)
+ 
+ LOCAL_HEADER_LIBRARIES += android.hardware.graphics.composer3-command-buffer
+ LOCAL_SHARED_LIBRARIES += android.hardware.graphics.composer3-V1-ndk libbinder libbinder_ndk
+-MESON_GEN_PKGCONFIGS += android.hardware.graphics.composer3-V1-ndk binder binder_ndk
++AOSPEXT_GEN_PKGCONFIGS += android.hardware.graphics.composer3-V1-ndk binder binder_ndk
+ AOSPEXT_GEN_TARGETS += \
+     bin:hw/android.hardware.composer.hwc3-service.drm:hw:android.hardware.composer.hwc3-service.drm: \
+     etc:init/hwc3-drm.rc:init:hwc3-drm.rc: \
+@@ -40,10 +41,7 @@ endif
+ 
+ # Build first ARCH only
+ LOCAL_MULTILIB := first
+-include $(LOCAL_PATH)/meson_cross.mk
+-AOSPEXT_TARGETS_DEP:=$(MESON_GEN_FILES_TARGET)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(dir $(AOSPEXT_TARGETS_DEP))/install
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=
++include $(LOCAL_PATH)/aospext_cross_compile.mk
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ 
+ #-------------------------------------------------------------------------------
+diff --git a/meson_ffmpegcodec2.mk b/meson_ffmpegcodec2.mk
+index e6d6312..fa44806 100644
+--- a/meson_ffmpegcodec2.mk
++++ b/meson_ffmpegcodec2.mk
+@@ -5,13 +5,13 @@
+ # Copyright (C) 2021 GlobalLogic Ukraine
+ # Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
+ 
+-AOSPEXT_PROJECT_NAME := FFMPEGCODEC2
+-
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_FFMPEGCODEC2)),)
+ 
+ LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
+ 
+-include $(CLEAR_VARS)
++AOSPEXT_PROJECT_NAME := FFMPEGCODEC2
++AOSPEXT_BUILD_SYSTEM := meson
+ 
+ LOCAL_SHARED_LIBRARIES := \
+     android.hardware.media.c2@1.2 \
+@@ -32,7 +32,7 @@ LOCAL_SHARED_LIBRARIES := \
+     libutils \
+     libcutils \
+ 
+-MESON_GEN_PKGCONFIGS := cutils drm hardware hidlbase log sync ui utils
++AOSPEXT_GEN_PKGCONFIGS := cutils drm hardware hidlbase log sync ui utils
+ 
+ MESON_BUILD_ARGUMENTS := \
+ 
+@@ -49,10 +49,7 @@ AOSPEXT_GEN_TARGETS := \
+ 
+ # Build first ARCH only
+ LOCAL_MULTILIB := first
+-include $(LOCAL_PATH)/meson_cross.mk
+-AOSPEXT_TARGETS_DEP:=$(MESON_GEN_FILES_TARGET)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(dir $(AOSPEXT_TARGETS_DEP))/install
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=
++include $(LOCAL_PATH)/aospext_cross_compile.mk
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ 
+ #-------------------------------------------------------------------------------
+diff --git a/meson_glib.mk b/meson_glib.mk
+index 3a71e97..a285c8f 100644
+--- a/meson_glib.mk
++++ b/meson_glib.mk
+@@ -5,16 +5,16 @@
+ # Copyright (C) 2021 GlobalLogic Ukraine
+ # Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
+ 
+-AOSPEXT_PROJECT_NAME := GLIB
+-
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_GLIB)),)
+ 
+ LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
+ 
+-include $(CLEAR_VARS)
++AOSPEXT_PROJECT_NAME := GLIB
++AOSPEXT_BUILD_SYSTEM := meson
+ 
+ LOCAL_SHARED_LIBRARIES := libc libpcre2 libffi libz
+-MESON_GEN_PKGCONFIGS := libpcre2-8:10.32 libffi:3.0.0 zlib
++AOSPEXT_GEN_PKGCONFIGS := libpcre2-8:10.32 libffi:3.0.0 zlib
+ 
+ MESON_BUILD_ARGUMENTS := \
+ 
+@@ -29,12 +29,10 @@ AOSPEXT_GEN_TARGETS := \
+     lib:libgio-2.0.so::libgio-2.0:         \
+     $(BOARD_GLIB_EXTRA_TARGETS)
+ 
++AOSPEXT_EXPORT_INSTALLED_INCLUDE_DIRS := vendor/include/glib-2.0 vendor/lib64/glib-2.0/include vendor/include/gio-unix-2.0
++
+ LOCAL_MULTILIB := first
+-include $(LOCAL_PATH)/meson_cross.mk
+-LOCAL_MULTILIB := first
+-AOSPEXT_TARGETS_DEP:=$(MESON_GEN_FILES_TARGET)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(dir $(AOSPEXT_TARGETS_DEP))/install
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=$(AOSPEXT_PROJECT_INSTALL_DIR)/vendor/include/glib-2.0 $(AOSPEXT_PROJECT_INSTALL_DIR)/vendor/lib64/glib-2.0/include $(AOSPEXT_PROJECT_INSTALL_DIR)/vendor/include/gio-unix-2.0
++include $(LOCAL_PATH)/aospext_cross_compile.mk
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ 
+ #-------------------------------------------------------------------------------
+diff --git a/meson_libcamera.mk b/meson_libcamera.mk
+index 0a103f9..7f08597 100644
+--- a/meson_libcamera.mk
++++ b/meson_libcamera.mk
+@@ -5,16 +5,16 @@
+ # Copyright (C) 2021 GlobalLogic Ukraine
+ # Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
+ 
+-AOSPEXT_PROJECT_NAME := LIBCAMERA
+-
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_LIBCAMERA)),)
+ 
+ LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
+ 
+-include $(CLEAR_VARS)
++AOSPEXT_PROJECT_NAME := LIBCAMERA
++AOSPEXT_BUILD_SYSTEM := meson
+ 
+ LOCAL_SHARED_LIBRARIES := libc libexif libjpeg libdl libudev libevent libcrypto
+-MESON_GEN_PKGCONFIGS := libexif libjpeg dl libudev libevent_pthreads libcrypto
++AOSPEXT_GEN_PKGCONFIGS := libexif libjpeg dl libudev libevent_pthreads libcrypto
+ 
+ MESON_BUILD_ARGUMENTS := \
+     -Dwerror=false                                                           \
+@@ -34,11 +34,10 @@ AOSPEXT_GEN_TARGETS := \
+     bin:cam::libcamera-cam:                   \
+     $(BOARD_LIBCAMERA_EXTRA_TARGETS)
+ 
++AOSPEXT_EXPORT_INSTALLED_INCLUDE_DIRS := vendor/include/libcamera
++
+ LOCAL_MULTILIB := first
+-include $(LOCAL_PATH)/meson_cross.mk
+-AOSPEXT_TARGETS_DEP:=$(MESON_GEN_FILES_TARGET)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(dir $(AOSPEXT_TARGETS_DEP))/install
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=$(AOSPEXT_PROJECT_INSTALL_DIR)/vendor/include/libcamera
++include $(LOCAL_PATH)/aospext_cross_compile.mk
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ 
+ #-------------------------------------------------------------------------------
+diff --git a/meson_libgudev.mk b/meson_libgudev.mk
+index 8f4fb57..f2839ae 100644
+--- a/meson_libgudev.mk
++++ b/meson_libgudev.mk
+@@ -5,18 +5,18 @@
+ # Copyright (C) 2021 GlobalLogic Ukraine
+ # Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
+ 
+-AOSPEXT_PROJECT_NAME := LIBGUDEV
+-
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_LIBGUDEV)),)
+ 
+ LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
+ 
+-include $(CLEAR_VARS)
++AOSPEXT_PROJECT_NAME := LIBGUDEV
++AOSPEXT_BUILD_SYSTEM := meson
+ 
+ GLIB_VERSION = $(shell cat $(BOARD_GLIB_SRC_DIR)/meson.build | grep -o "\<version\>\s*:\s*'\w*\.\w*\.\w*'" | grep -o "\w*\.\w*\.\w*" | head -1)
+ 
+ LOCAL_SHARED_LIBRARIES := libc libglib-2.0 libgobject-2.0 libudev
+-MESON_GEN_PKGCONFIGS := glib-2.0:$(GLIB_VERSION) gobject-2.0:$(GLIB_VERSION) libudev:199
++AOSPEXT_GEN_PKGCONFIGS := glib-2.0:$(GLIB_VERSION) gobject-2.0:$(GLIB_VERSION) libudev:199
+ 
+ MESON_BUILD_ARGUMENTS := \
+ 
+@@ -26,12 +26,11 @@ AOSPEXT_GEN_TARGETS := \
+     lib:libgudev-1.0.so::libgudev-1.0: \
+     $(BOARD_LIBGUDEV_EXTRA_TARGETS)
+ 
++AOSPEXT_EXPORT_INSTALLED_INCLUDE_DIRS := vendor/include/gudev-1.0
++
+ # Build first ARCH only
+ LOCAL_MULTILIB := first
+-include $(LOCAL_PATH)/meson_cross.mk
+-AOSPEXT_TARGETS_DEP:=$(MESON_GEN_FILES_TARGET)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(dir $(AOSPEXT_TARGETS_DEP))/install
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=$(AOSPEXT_PROJECT_INSTALL_DIR)/vendor/include/gudev-1.0
++include $(LOCAL_PATH)/aospext_cross_compile.mk
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ 
+ #-------------------------------------------------------------------------------
+diff --git a/meson_libqmi.mk b/meson_libqmi.mk
+index 9039f8b..e0d6651 100644
+--- a/meson_libqmi.mk
++++ b/meson_libqmi.mk
+@@ -5,16 +5,16 @@
+ # Copyright (C) 2021 GlobalLogic Ukraine
+ # Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
+ 
+-AOSPEXT_PROJECT_NAME := LIBQMI
+-
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_LIBQMI)),)
+ 
+ LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
+ 
+-include $(CLEAR_VARS)
++AOSPEXT_PROJECT_NAME := LIBQMI
++AOSPEXT_BUILD_SYSTEM := meson
+ 
+ LOCAL_SHARED_LIBRARIES := libc libglib-2.0 libgio-2.0 libgobject-2.0
+-MESON_GEN_PKGCONFIGS := glib-2.0:2.75.1 gio-2.0:2.75.1 gio-unix-2.0:2.75.1 gobject-2.0:2.75.1
++AOSPEXT_GEN_PKGCONFIGS := glib-2.0:2.75.1 gio-2.0:2.75.1 gio-unix-2.0:2.75.1 gobject-2.0:2.75.1
+ 
+ MESON_BUILD_ARGUMENTS := \
+     -Dudev=false \
+@@ -35,12 +35,11 @@ AOSPEXT_GEN_TARGETS := \
+ AOSPEXT_GEN_TARGETS += \
+     $(foreach bin,$(TMP_OUT_BIN), bin:$(bin)::$(bin):)
+ 
++AOSPEXT_EXPORT_INSTALLED_INCLUDE_DIRS := vendor/include/libqmi-glib
++
+ # Build first ARCH only
+ LOCAL_MULTILIB := first
+-include $(LOCAL_PATH)/meson_cross.mk
+-AOSPEXT_TARGETS_DEP:=$(MESON_GEN_FILES_TARGET)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(dir $(AOSPEXT_TARGETS_DEP))/install
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=$(AOSPEXT_PROJECT_INSTALL_DIR)/vendor/include/libqmi-glib
++include $(LOCAL_PATH)/aospext_cross_compile.mk
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ 
+ #-------------------------------------------------------------------------------
+diff --git a/meson_mesa3d.mk b/meson_mesa3d.mk
+index 34e4813..ab68afa 100644
+--- a/meson_mesa3d.mk
++++ b/meson_mesa3d.mk
+@@ -5,11 +5,13 @@
+ # Copyright (C) 2021 GlobalLogic Ukraine
+ # Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
+ 
+-AOSPEXT_PROJECT_NAME := MESA3D
+-
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_MESA3D)),)
+ 
+ LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
++
++AOSPEXT_PROJECT_NAME := MESA3D
++AOSPEXT_BUILD_SYSTEM := meson
+ 
+ LIBDRM_VERSION = $(shell cat external/libdrm/meson.build | grep -o "\<version\>\s*:\s*'\w*\.\w*\.\w*'" | grep -o "\w*\.\w*\.\w*" | head -1)
+ 
+@@ -67,7 +69,7 @@ include $(CLEAR_VARS)
+ LOCAL_SHARED_LIBRARIES := libc libdl libdrm libm liblog libcutils libz libc++ libnativewindow libsync libhardware
+ LOCAL_STATIC_LIBRARIES := libexpat libarect libelf
+ LOCAL_HEADER_LIBRARIES := libnativebase_headers hwvulkan_headers
+-MESON_GEN_PKGCONFIGS := cutils expat hardware libdrm:$(LIBDRM_VERSION) nativewindow sync zlib:1.2.11 libelf
++AOSPEXT_GEN_PKGCONFIGS := cutils expat hardware libdrm:$(LIBDRM_VERSION) nativewindow sync zlib:1.2.11 libelf
+ LOCAL_CFLAGS += $(BOARD_MESA3D_CFLAGS)
+ 
+ ifneq ($(filter swrast,$(BOARD_MESA3D_GALLIUM_DRIVERS) $(BOARD_MESA3D_VULKAN_DRIVERS)),)
+@@ -78,12 +80,12 @@ endif
+ 
+ ifneq ($(filter zink,$(BOARD_MESA3D_GALLIUM_DRIVERS)),)
+ LOCAL_SHARED_LIBRARIES += libvulkan
+-MESON_GEN_PKGCONFIGS += vulkan
++AOSPEXT_GEN_PKGCONFIGS += vulkan
+ endif
+ 
+ ifneq ($(filter iris,$(BOARD_MESA3D_GALLIUM_DRIVERS)),)
+ LOCAL_SHARED_LIBRARIES += libdrm_intel
+-MESON_GEN_PKGCONFIGS += libdrm_intel:$(LIBDRM_VERSION)
++AOSPEXT_GEN_PKGCONFIGS += libdrm_intel:$(LIBDRM_VERSION)
+ endif
+ 
+ ifneq ($(filter radeonsi,$(BOARD_MESA3D_GALLIUM_DRIVERS)),)
+@@ -93,23 +95,23 @@ endif
+ 
+ ifneq ($(filter radeonsi amd,$(BOARD_MESA3D_GALLIUM_DRIVERS) $(BOARD_MESA3D_VULKAN_DRIVERS)),)
+ LOCAL_SHARED_LIBRARIES += libdrm_amdgpu
+-MESON_GEN_PKGCONFIGS += libdrm_amdgpu:$(LIBDRM_VERSION)
++AOSPEXT_GEN_PKGCONFIGS += libdrm_amdgpu:$(LIBDRM_VERSION)
+ endif
+ 
+ ifneq ($(filter radeonsi r300 r600,$(BOARD_MESA3D_GALLIUM_DRIVERS)),)
+ LOCAL_SHARED_LIBRARIES += libdrm_radeon
+-MESON_GEN_PKGCONFIGS += libdrm_radeon:$(LIBDRM_VERSION)
++AOSPEXT_GEN_PKGCONFIGS += libdrm_radeon:$(LIBDRM_VERSION)
+ endif
+ 
+ ifneq ($(filter nouveau,$(BOARD_MESA3D_GALLIUM_DRIVERS)),)
+ LOCAL_SHARED_LIBRARIES += libdrm_nouveau
+-MESON_GEN_PKGCONFIGS += libdrm_nouveau:$(LIBDRM_VERSION)
++AOSPEXT_GEN_PKGCONFIGS += libdrm_nouveau:$(LIBDRM_VERSION)
+ endif
+ 
+ ifneq ($(filter d3d12,$(BOARD_MESA3D_GALLIUM_DRIVERS)),)
+ LOCAL_HEADER_LIBRARIES += DirectX-Headers
+ LOCAL_STATIC_LIBRARIES += DirectX-Guids
+-MESON_GEN_PKGCONFIGS += DirectX-Headers
++AOSPEXT_GEN_PKGCONFIGS += DirectX-Headers
+ endif
+ 
+ ifneq ($(MESON_GEN_LLVM_STUB),)
+@@ -124,9 +126,12 @@ LOCAL_SHARED_LIBRARIES += \
+     libhidlbase \
+     libutils
+ 
+-MESON_GEN_PKGCONFIGS += android.hardware.graphics.mapper:4.0
++AOSPEXT_GEN_PKGCONFIGS += android.hardware.graphics.mapper:4.0
+ endif
+ 
++LOCAL_EXPORT_C_INCLUDE_DIRS := $(BOARD_MESA3D_SRC_DIR)/src/gbm/main
++AOSPEXT_EXPORT_INSTALLED_INCLUDE_DIRS := vendor/include
++
+ define populate_dri_symlinks
+ # -------------------------------------------------------------------------------
+ # Mesa3d installs every dri target as a separate shared library, but for gallium drivers all
+@@ -134,8 +139,8 @@ define populate_dri_symlinks
+ # To do that we take first driver, copy it as libgallium_dri.so and populate vendor/lib{64}/dri/
+ # directory with a symlinks to libgallium_dri.so
+ 
+-$(SYMLINKS_TARGET): MESA3D_LIB_INSTALL_DIR:=$(dir $(MESON_GEN_FILES_TARGET))/install/vendor/lib$(if $(TARGET_IS_64_BIT),$(if $(filter 64 first,$(LOCAL_MULTILIB)),64))
+-$(SYMLINKS_TARGET): $(MESON_GEN_FILES_TARGET)
++$(SYMLINKS_TARGET): MESA3D_LIB_INSTALL_DIR:=$(dir $(AOSPEXT_INTERNAL_BUILD_TARGET))/install/vendor/lib$(if $(TARGET_IS_64_BIT),$(if $(filter 64 first,$(LOCAL_MULTILIB)),64))
++$(SYMLINKS_TARGET): $(AOSPEXT_INTERNAL_BUILD_TARGET)
+ 	# Create Symlinks
+ 	mkdir -p $$(dir $$@)
+ ifneq ($(strip $(BOARD_MESA3D_GALLIUM_DRIVERS)),)
+@@ -145,38 +150,35 @@ endif
+ 	touch $$@
+ endef
+ 
+-
+ #-------------------------------------------------------------------------------
+ 
+ LOCAL_MULTILIB := first
+-include $(LOCAL_PATH)/meson_cross.mk
+-SYMLINKS_TARGET:=$($(AOSPEXT_ARCH_PREFIX)TARGET_OUT_VENDOR_SHARED_LIBRARIES)/dri/.symlinks.timestamp
++include $(LOCAL_PATH)/aospext_cross_compile.mk
++SYMLINKS_TARGET := $($(AOSPEXT_ARCH_PREFIX)TARGET_OUT_VENDOR_SHARED_LIBRARIES)/dri/.symlinks.timestamp
+ $(eval $(call populate_dri_symlinks))
+-FIRSTARCH_SYMLINKS_TARGET:=$(SYMLINKS_TARGET)
+-FIRSTARCH_INSTALL_DIR:=$(dir $(MESON_GEN_FILES_TARGET))/install
++FIRSTARCH_SYMLINKS_TARGET := $(SYMLINKS_TARGET)
++FIRSTARCH_BUILD_TARGET := $(AOSPEXT_INTERNAL_BUILD_TARGET)
+ 
+ ifdef TARGET_2ND_ARCH
+ LOCAL_MULTILIB := 32
+-include $(LOCAL_PATH)/meson_cross.mk
+-SYMLINKS_TARGET:=$($(AOSPEXT_ARCH_PREFIX)TARGET_OUT_VENDOR_SHARED_LIBRARIES)/dri/.symlinks.timestamp
++include $(LOCAL_PATH)/aospext_cross_compile.mk
++SYMLINKS_TARGET := $($(AOSPEXT_ARCH_PREFIX)TARGET_OUT_VENDOR_SHARED_LIBRARIES)/dri/.symlinks.timestamp
+ $(eval $(call populate_dri_symlinks))
+-SECONDARCH_SYMLINKS_TARGET:=$(SYMLINKS_TARGET)
+-SECONDARCH_INSTALL_DIR:=$(dir $(MESON_GEN_FILES_TARGET))/install
++SECONDARCH_SYMLINKS_TARGET := $(SYMLINKS_TARGET)
++SECONDARCH_BUILD_TARGET := $(AOSPEXT_INTERNAL_BUILD_TARGET)
+ endif
+ 
+ #-------------------------------------------------------------------------------
+ 
+ LOCAL_MULTILIB := first
+-AOSPEXT_TARGETS_DEP:=$(FIRSTARCH_SYMLINKS_TARGET)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(FIRSTARCH_INSTALL_DIR)
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=$(AOSPEXT_PROJECT_INSTALL_DIR)/vendor/include $(BOARD_MESA3D_SRC_DIR)/src/gbm/main
++AOSPEXT_EXTRA_DEPS := $(FIRSTARCH_SYMLINKS_TARGET)
++AOSPEXT_INTERNAL_BUILD_TARGET := $(FIRSTARCH_BUILD_TARGET)
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ 
+ ifdef TARGET_2ND_ARCH
+ LOCAL_MULTILIB := 32
+-AOSPEXT_TARGETS_DEP:=$(SECONDARCH_SYMLINKS_TARGET)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(SECONDARCH_INSTALL_DIR)
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=$(AOSPEXT_PROJECT_INSTALL_DIR)/vendor/include $(BOARD_MESA3D_SRC_DIR)/src/gbm/main
++AOSPEXT_EXTRA_DEPS := $(SECONDARCH_SYMLINKS_TARGET)
++AOSPEXT_INTERNAL_BUILD_TARGET := $(SECONDARCH_BUILD_TARGET)
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ endif
+ 
+diff --git a/meson_minigbm.mk b/meson_minigbm.mk
+index e9672e1..4c7b49f 100644
+--- a/meson_minigbm.mk
++++ b/meson_minigbm.mk
+@@ -5,18 +5,18 @@
+ # Copyright (C) 2021 GlobalLogic Ukraine
+ # Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
+ 
+-AOSPEXT_PROJECT_NAME := MINIGBM
+-
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_MINIGBM)),)
+ 
+ LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
+ 
+-include $(CLEAR_VARS)
++AOSPEXT_PROJECT_NAME := MINIGBM
++AOSPEXT_BUILD_SYSTEM := meson
+ 
+ LOCAL_HEADER_LIBRARIES := libnativebase_headers
+ LOCAL_SHARED_LIBRARIES := libcutils libdrm libhardware libhidlbase liblog libnativewindow libsync
+ LOCAL_STATIC_LIBRARIES := libarect
+-MESON_GEN_PKGCONFIGS := cutils drm hardware hidlbase log nativewindow sync arect
++AOSPEXT_GEN_PKGCONFIGS := cutils drm hardware hidlbase log nativewindow sync arect
+ 
+ ifeq ($(shell test $(PLATFORM_SDK_VERSION) -ge 30; echo $$?), 0)
+ LOCAL_SHARED_LIBRARIES += libgbm_mesa
+@@ -38,7 +38,7 @@ AOSPEXT_GEN_TARGETS := \
+ ifeq ($(shell test $(PLATFORM_SDK_VERSION) -ge 30; echo $$?), 0)
+ 
+ LOCAL_SHARED_LIBRARIES += android.hardware.graphics.mapper@4.0 android.hardware.graphics.allocator@4.0 libgralloctypes libbase libutils
+-MESON_GEN_PKGCONFIGS += android.hardware.graphics.mapper@4.0 android.hardware.graphics.allocator@4.0 gralloctypes base utils
++AOSPEXT_GEN_PKGCONFIGS += android.hardware.graphics.mapper@4.0 android.hardware.graphics.allocator@4.0 gralloctypes base utils
+ AOSPEXT_GEN_TARGETS += \
+     bin:hw/android.hardware.graphics.allocator@4.0-service.minigbm_gd:hw:android.hardware.graphics.allocator@4.0-service.minigbm_gd: \
+     lib:hw/android.hardware.graphics.mapper@4.0-impl.minigbm_gd.so:hw:android.hardware.graphics.mapper@4.0-impl.minigbm_gd: \
+@@ -46,26 +46,22 @@ AOSPEXT_GEN_TARGETS += \
+ endif
+ 
+ LOCAL_MULTILIB := first
+-include $(LOCAL_PATH)/meson_cross.mk
+-TMP_AOSPEXT_TARGETS_DEP_FIRST:=$(MESON_GEN_FILES_TARGET)
++include $(LOCAL_PATH)/aospext_cross_compile.mk
++TMP_AOSPEXT_TARGET_FIRST:=$(AOSPEXT_INTERNAL_BUILD_TARGET)
+ 
+ ifdef TARGET_2ND_ARCH
+ LOCAL_MULTILIB := 32
+-include $(LOCAL_PATH)/meson_cross.mk
+-TMP_AOSPEXT_TARGETS_DEP_32:=$(MESON_GEN_FILES_TARGET)
++include $(LOCAL_PATH)/aospext_cross_compile.mk
++TMP_AOSPEXT_TARGET_32:=$(AOSPEXT_INTERNAL_BUILD_TARGET)
+ endif
+ 
+ LOCAL_MULTILIB := first
+-AOSPEXT_TARGETS_DEP:=$(TMP_AOSPEXT_TARGETS_DEP_FIRST)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(dir $(AOSPEXT_TARGETS_DEP))/install
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=
++AOSPEXT_INTERNAL_BUILD_TARGET:=$(TMP_AOSPEXT_TARGET_FIRST)
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ 
+ ifdef TARGET_2ND_ARCH
+ LOCAL_MULTILIB := 32
+-AOSPEXT_TARGETS_DEP:=$(TMP_AOSPEXT_TARGETS_DEP_32)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(dir $(AOSPEXT_TARGETS_DEP))/install
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=
++AOSPEXT_INTERNAL_BUILD_TARGET:=$(TMP_AOSPEXT_TARGET_32)
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ endif
+ 
+diff --git a/meson_modemmanager.mk b/meson_modemmanager.mk
+index b650d6c..75731be 100644
+--- a/meson_modemmanager.mk
++++ b/meson_modemmanager.mk
+@@ -5,19 +5,19 @@
+ # Copyright (C) 2021 GlobalLogic Ukraine
+ # Copyright (C) 2021-2022 Roman Stratiienko (r.stratiienko@gmail.com)
+ 
+-AOSPEXT_PROJECT_NAME := MODEMMANAGER
+-
+ ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_MODEMMANAGER)),)
+ 
+ LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
+ 
+-include $(CLEAR_VARS)
++AOSPEXT_PROJECT_NAME := MODEMMANAGER
++AOSPEXT_BUILD_SYSTEM := meson
+ 
+ GLIB_VERSION = $(shell cat $(BOARD_GLIB_SRC_DIR)/meson.build | grep -o "\<version\>\s*:\s*'\w*\.\w*\.\w*'" | grep -o "\w*\.\w*\.\w*" | head -1)
+ LIBQMI_VERSION = $(shell cat $(BOARD_LIBQMI_SRC_DIR)/meson.build | grep -o "\<version\>\s*:\s*'\w*\.\w*\.\w*'" | grep -o "\w*\.\w*\.\w*" | head -1)
+ 
+ LOCAL_SHARED_LIBRARIES := libc libexpat libglib-2.0 libgio-2.0 libgobject-2.0 libgmodule-2.0 libdbus-1 libqmi-glib libgudev-1.0
+-MESON_GEN_PKGCONFIGS := glib-2.0:$(GLIB_VERSION) gmodule-2.0:$(GLIB_VERSION) gobject-2.0:$(GLIB_VERSION) gio-2.0:$(GLIB_VERSION) gio-unix-2.0:$(GLIB_VERSION) dbus-1 qmi-glib:$(LIBQMI_VERSION) gudev-1.0:232
++AOSPEXT_GEN_PKGCONFIGS := glib-2.0:$(GLIB_VERSION) gmodule-2.0:$(GLIB_VERSION) gobject-2.0:$(GLIB_VERSION) gio-2.0:$(GLIB_VERSION) gio-unix-2.0:$(GLIB_VERSION) dbus-1 qmi-glib:$(LIBQMI_VERSION) gudev-1.0:232
+ 
+ MESON_BUILD_ARGUMENTS := \
+     -Dmbim=false \
+@@ -43,11 +43,10 @@ AOSPEXT_GEN_TARGETS := \
+     etc:dbus-1/system.d/org.freedesktop.ModemManager1.conf:dbus-1/system.d:org.freedesktop.ModemManager1.conf: \
+     $(BOARD_MODEMMANAGER_EXTRA_TARGETS)
+ 
++AOSPEXT_EXPORT_INSTALLED_INCLUDE_DIRS := vendor/include/libmm-glib vendor/include/ModemManager
++
+ LOCAL_MULTILIB := first
+-include $(LOCAL_PATH)/meson_cross.mk
+-AOSPEXT_TARGETS_DEP:=$(MESON_GEN_FILES_TARGET)
+-AOSPEXT_PROJECT_INSTALL_DIR:=$(dir $(AOSPEXT_TARGETS_DEP))/install
+-AOSPEXT_PROJECT_OUT_INCLUDE_DIR:=$(AOSPEXT_PROJECT_INSTALL_DIR)/vendor/include/libmm-glib $(AOSPEXT_PROJECT_INSTALL_DIR)/vendor/include/ModemManager
++include $(LOCAL_PATH)/aospext_cross_compile.mk
+ include $(LOCAL_PATH)/aospext_gen_targets.mk
+ 
+ #-------------------------------------------------------------------------------
+diff --git a/tools/makefile_meson.mk b/tools/makefile_meson.mk
+index 2620a54..aced3dc 100644
+--- a/tools/makefile_meson.mk
++++ b/tools/makefile_meson.mk
+@@ -10,11 +10,11 @@ configure: export BASE_DIR = $(OUT_BASE_DIR)
+ configure: $(CONFIGURE_TARGET)
+ $(CONFIGURE_TARGET): $(PATCH_TARGET)
+ 	@echo Configuring...
+-	@echo "[constants]" > $(OUT_BASE_DIR)/gen/aosp_cross.out
+-	@echo "base_dir='$(OUT_BASE_DIR)'" >> $(OUT_BASE_DIR)/gen/aosp_cross.out
+-	@echo "llvm_dir='$(LLVM_DIR)'" >> $(OUT_BASE_DIR)/gen/aosp_cross.out
+-	@cat $(OUT_BASE_DIR)/gen/aosp_cross >> $(OUT_BASE_DIR)/gen/aosp_cross.out
+-	@(cd $(OUT_SRC_DIR) && meson setup $(OUT_BUILD_DIR) --cross-file $(OUT_BASE_DIR)/gen/aosp_cross.out $(MESON_DEFS)) &> $@.tmp || (cat $@.tmp && exit 1)
++	@echo "[constants]" > $(OUT_BASE_DIR)/gen/meson_aosp_cross.out
++	@echo "base_dir='$(OUT_BASE_DIR)'" >> $(OUT_BASE_DIR)/gen/meson_aosp_cross.out
++	@echo "llvm_dir='$(LLVM_DIR)'" >> $(OUT_BASE_DIR)/gen/meson_aosp_cross.out
++	@cat $(OUT_BASE_DIR)/gen/meson_aosp_cross >> $(OUT_BASE_DIR)/gen/meson_aosp_cross.out
++	@(cd $(OUT_SRC_DIR) && meson setup $(OUT_BUILD_DIR) --cross-file $(OUT_BASE_DIR)/gen/meson_aosp_cross.out $(MESON_DEFS)) &> $@.tmp || (cat $@.tmp && exit 1)
+ 	@mv $@.tmp $@ -f
+ 
+ build: ## Build the project
+diff --git a/tools/wrapper.sh b/tools/wrapper.sh
+index ef42e6e..430fc11 100755
+--- a/tools/wrapper.sh
++++ b/tools/wrapper.sh
+@@ -31,19 +31,20 @@ elif [ "${COMPILER}" == "wrap_cxx" ]; then
+     ARGS="${CXX} $@"
+ elif [ "${COMPILER}" == "wrap_rust_ld" ]; then
+     ARGS="${CC} $@ ${LINK_ARGS} -Wl,--unresolved-symbols=ignore-all"
+-    # Filter-out libraries, since we're not using NDK but adding .so directly
+-    ARGS="${ARGS//-lc++_shared/}"
+-    ARGS="${ARGS//-lc/}"
+-    ARGS="${ARGS//-ldl/}"
+-    ARGS="${ARGS//-lgcc/}"
+-    ARGS="${ARGS//-llog/}"
+-    ARGS="${ARGS//-lm/}"
+-    ARGS="${ARGS//-lunwind/}"
+ else
+     echo "Unknown compiler: ${COMPILER}"
+     exit 1
+ fi
+ 
++# Filter-out libraries, since we're not using NDK but adding .so directly
++ARGS="${ARGS//-lc++_shared/}"
++ARGS="${ARGS//-lc/}"
++ARGS="${ARGS//-ldl/}"
++ARGS="${ARGS//-lgcc/}"
++ARGS="${ARGS//-llog/}"
++ARGS="${ARGS//-lm/}"
++ARGS="${ARGS//-lunwind/}"
++
+ ARGS="${ARGS/\[C_ARGS\]/${CFLAGS}}"
+ ARGS="${ARGS/\[CPP_ARGS\]/${CPPFLAGS}}"
+ ARGS="${ARGS/\[C_LINK_ARGS\]/${LINK_ARGS}}"
+-- 
+2.39.2
+

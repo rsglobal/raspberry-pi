@@ -1,0 +1,26 @@
+From 430ebc5df82a67faade96fa54072338918e4ecbe Mon Sep 17 00:00:00 2001
+From: Roman Stratiienko <r.stratiienko@gmail.com>
+Date: Mon, 6 Nov 2023 04:01:06 +0200
+Subject: [PATCH 2/2] cmake: Add -Wno-XXX flags to satisfy clang17
+
+Signed-off-by: Roman Stratiienko <r.stratiienko@gmail.com>
+---
+ cmake/GlobalConfig.cmake | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/cmake/GlobalConfig.cmake b/cmake/GlobalConfig.cmake
+index 2d97899ce..8af851076 100644
+--- a/cmake/GlobalConfig.cmake
++++ b/cmake/GlobalConfig.cmake
+@@ -101,7 +101,7 @@ endif()
+ # Compiler flags that are always set
+ set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+ if(COMPILER_IS_GNU_LIKE)
+-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -Wall -Wextra -Werror -Wold-style-cast -Wno-missing-braces -Wconversion -Wsign-conversion")
++    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17 -Wall -Wextra -Werror -Wold-style-cast -Wno-missing-braces -Wconversion -Wsign-conversion -Wno-unqualified-std-cast-call -Wno-unused-command-line-argument")
+     if (CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}  -Wno-psabi")
+     endif()
+-- 
+2.39.2
+

@@ -1,0 +1,18 @@
+From 4595609b0f2b93f09e21a34d10c578e0ecd48d37 Mon Sep 17 00:00:00 2001
+From: Roman Stratiienko <r.stratiienko@gmail.com>
+Date: Mon, 6 Nov 2023 03:58:03 +0200
+Subject: [PATCH] Rename Android.bp to avoid interfering with AOSPext
+
+Signed-off-by: Roman Stratiienko <r.stratiienko@gmail.com>
+---
+ Android.bp => Android.bp_ | 0
+ 1 file changed, 0 insertions(+), 0 deletions(-)
+ rename Android.bp => Android.bp_ (100%)
+
+diff --git a/Android.bp b/Android.bp_
+similarity index 100%
+rename from Android.bp
+rename to Android.bp_
+-- 
+2.39.2
+

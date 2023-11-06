@@ -1,0 +1,120 @@
+From af65e1a4cd2b20e2a0f6cf2d2d660bc22397f469 Mon Sep 17 00:00:00 2001
+From: Roman Stratiienko <r.stratiienko@gmail.com>
+Date: Mon, 6 Nov 2023 02:12:26 +0200
+Subject: [PATCH 4/5] Add armnn and ComputeLibrary projects
+
+armnn: https://github.com/ARM-software/armnn
+ComputeLibrary: https://github.com/ARM-software/ComputeLibrary
+
+Signed-off-by: Roman Stratiienko <r.stratiienko@gmail.com>
+---
+ Android.mk              |  3 +++
+ cmake_armnn.mk          | 36 ++++++++++++++++++++++++++++++++++++
+ cmake_computelibrary.mk | 38 ++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 77 insertions(+)
+ create mode 100644 cmake_armnn.mk
+ create mode 100644 cmake_computelibrary.mk
+
+diff --git a/Android.mk b/Android.mk
+index 6146a06..abe147f 100644
+--- a/Android.mk
++++ b/Android.mk
+@@ -8,6 +8,9 @@ LOCAL_PATH := $(call my-dir)
+ 
+ include $(LOCAL_PATH)/cargo_mmradio.mk
+ 
++include $(LOCAL_PATH)/cmake_armnn.mk
++include $(LOCAL_PATH)/cmake_computelibrary.mk
++
+ include $(LOCAL_PATH)/ffmpeg.mk
+ 
+ include $(LOCAL_PATH)/meson_dav1d.mk
+diff --git a/cmake_armnn.mk b/cmake_armnn.mk
+new file mode 100644
+index 0000000..5490185
+--- /dev/null
++++ b/cmake_armnn.mk
+@@ -0,0 +1,36 @@
++# SPDX-License-Identifier: Apache-2.0
++#
++# AOSPEXT project (https://github.com/GloDroid/aospext)
++#
++# Copyright (C) 2021 GlobalLogic Ukraine
++# Copyright (C) 2021-2023 Roman Stratiienko (r.stratiienko@gmail.com)
++
++ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_ARMNN)),)
++
++LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
++
++AOSPEXT_PROJECT_NAME := ARMNN
++AOSPEXT_BUILD_SYSTEM := cmake
++
++LOCAL_SHARED_LIBRARIES := libc liblog
++
++CMAKE_ARGUMENTS := -DBUILD_SHARED_LIBS=ON
++
++# Format: TYPE:REL_PATH_TO_INSTALL_ARTIFACT:VENDOR_SUBDIR:MODULE_NAME:SYMLINK_SUFFIX
++# TYPE one of: lib, bin, etc
++AOSPEXT_GEN_TARGETS := \
++    lib:libarmnn.so::libarmnn: \
++    bin:armnn-tests::armnn-tests: \
++    $(BOARD_ARMNN_EXTRA_TARGETS)
++
++LOCAL_EXPORT_C_INCLUDE_DIRS := $(BOARD_ARMNN_SRC_DIR)/include $(BOARD_ARMNN_SRC_DIR)/third-party $(BOARD_ARMNN_SRC_DIR)/third-party/half/
++
++# Build first ARCH only
++LOCAL_MULTILIB := first
++include $(LOCAL_PATH)/aospext_cross_compile.mk
++include $(LOCAL_PATH)/aospext_gen_targets.mk
++
++#-------------------------------------------------------------------------------
++
++endif # BOARD_BUILD_AOSPEXT_ARMNN
+diff --git a/cmake_computelibrary.mk b/cmake_computelibrary.mk
+new file mode 100644
+index 0000000..8048bc4
+--- /dev/null
++++ b/cmake_computelibrary.mk
+@@ -0,0 +1,38 @@
++# SPDX-License-Identifier: Apache-2.0
++#
++# AOSPEXT project (https://github.com/GloDroid/aospext)
++#
++# Copyright (C) 2021 GlobalLogic Ukraine
++# Copyright (C) 2021-2023 Roman Stratiienko (r.stratiienko@gmail.com)
++
++ifneq ($(filter true, $(BOARD_BUILD_AOSPEXT_COMPUTELIBRARY)),)
++
++LOCAL_PATH := $(call my-dir)
++include $(LOCAL_PATH)/aospext_cleanup.mk
++
++AOSPEXT_PROJECT_NAME := COMPUTELIBRARY
++AOSPEXT_BUILD_SYSTEM := cmake
++
++LOCAL_SHARED_LIBRARIES := libc
++
++CMAKE_ARGUMENTS := -DARM_COMPUTE_OPENMP=0
++
++# Format: TYPE:REL_PATH_TO_INSTALL_ARTIFACT:VENDOR_SUBDIR:MODULE_NAME:SYMLINK_SUFFIX
++# TYPE one of: lib, bin, etc
++AOSPEXT_GEN_TARGETS := \
++    lib:libarm_compute.so::libarm_compute: \
++    lib:libarm_compute_graph.so::libarm_compute_graph: \
++    lib:libarm_compute_sve.so::libarm_compute_sve: \
++    lib:libarm_compute_sve2.so::libarm_compute_sve2: \
++    $(BOARD_COMPUTELIBRARY_EXTRA_TARGETS)
++
++LOCAL_EXPORT_C_INCLUDE_DIRS := $(BOARD_COMPUTELIBRARY_SRC_DIR)/include $(BOARD_COMPUTELIBRARY_SRC_DIR)
++
++# Build first ARCH only
++LOCAL_MULTILIB := first
++include $(LOCAL_PATH)/aospext_cross_compile.mk
++include $(LOCAL_PATH)/aospext_gen_targets.mk
++
++#-------------------------------------------------------------------------------
++
++endif # BOARD_BUILD_AOSPEXT_COMPUTELIBRARY
+-- 
+2.39.2
+

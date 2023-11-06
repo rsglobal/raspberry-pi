@@ -1,0 +1,39 @@
+From f89424cd82535de766a82b7f4158405943f717d0 Mon Sep 17 00:00:00 2001
+From: Roman Stratiienko <r.stratiienko@gmail.com>
+Date: Mon, 6 Nov 2023 02:08:38 +0200
+Subject: [PATCH 2/5] Sort Android.mk includes alphabetically
+
+Signed-off-by: Roman Stratiienko <r.stratiienko@gmail.com>
+---
+ Android.mk | 11 ++++++-----
+ 1 file changed, 6 insertions(+), 5 deletions(-)
+
+diff --git a/Android.mk b/Android.mk
+index 4e6d7a9..6146a06 100644
+--- a/Android.mk
++++ b/Android.mk
+@@ -8,15 +8,16 @@ LOCAL_PATH := $(call my-dir)
+ 
+ include $(LOCAL_PATH)/cargo_mmradio.mk
+ 
++include $(LOCAL_PATH)/ffmpeg.mk
++
+ include $(LOCAL_PATH)/meson_dav1d.mk
+ include $(LOCAL_PATH)/meson_dbus.mk
++include $(LOCAL_PATH)/meson_drmhwcomposer.mk
++include $(LOCAL_PATH)/meson_ffmpegcodec2.mk
+ include $(LOCAL_PATH)/meson_glib.mk
+-include $(LOCAL_PATH)/meson_libgudev.mk
+-include $(LOCAL_PATH)/meson_mesa3d.mk
+ include $(LOCAL_PATH)/meson_libcamera.mk
++include $(LOCAL_PATH)/meson_libgudev.mk
+ include $(LOCAL_PATH)/meson_libqmi.mk
++include $(LOCAL_PATH)/meson_mesa3d.mk
+ include $(LOCAL_PATH)/meson_minigbm.mk
+ include $(LOCAL_PATH)/meson_modemmanager.mk
+-include $(LOCAL_PATH)/meson_drmhwcomposer.mk
+-include $(LOCAL_PATH)/meson_ffmpegcodec2.mk
+-include $(LOCAL_PATH)/ffmpeg.mk
+-- 
+2.39.2
+
